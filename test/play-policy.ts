@@ -53,6 +53,7 @@ export function testInput(run: Run, takeShortcuts: boolean): Input {
   const time = run.tick / HZ
   const tool = nearestTool(run, 40)
   const shortcut = takeShortcuts && run.ranks.caliper > 0 ? nearestShortcut(run, 40) : undefined
+  const review = !takeShortcuts && run.incident?.stage === 'open' ? run.incident.inspection : undefined
   let goalX = Math.cos(time * 0.34) * 6.8
   let goalZ = Math.sin(time * 0.34) * 4.8
   let distanceToGoal = 9
@@ -64,7 +65,7 @@ export function testInput(run: Run, takeShortcuts: boolean): Input {
     goalZ = shard.z
     distanceToGoal = distance
   }
-  const objective = shortcut ?? tool
+  const objective = shortcut ?? review ?? tool
   if (objective) {
     goalX = objective.x
     goalZ = objective.z
@@ -77,7 +78,8 @@ export function testInput(run: Run, takeShortcuts: boolean): Input {
     if (!enemy.active) continue
     nearest = Math.min(nearest, Math.hypot(enemy.x - p.x, enemy.z - p.z))
   }
-  if (Math.hypot(goalX - p.x, goalZ - p.z) < 0.38 && nearest > 3) {
+  const atObjective = Math.hypot(goalX - p.x, goalZ - p.z)
+  if ((review && atObjective <= .8 && nearest > .72) || (atObjective < .38 && nearest > 3)) {
     return { x: 0, z: 0, dash: false, accept: Boolean(shortcut && nearestShortcut(run, 1.58)) }
   }
   for (const option of inputVectors) {

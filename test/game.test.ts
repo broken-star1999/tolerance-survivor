@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  BOSS_TICK, END_TICK, HZ, IDLE_INPUT, SHORTCUT_TICKS, Signal, advanceRun, attackInterval,
-  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, waveCount, waveCycleTicks, waveGapDegrees,
+  BOSS_TICK, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, Signal, advanceRun, attackInterval,
+  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, previewToolStats, waveCount, waveCycleTicks, waveGapDegrees,
   type Run,
 } from '../src/simulation.hot.ts'
 import { pickTestUpgrade, testInput } from './play-policy.ts'
@@ -63,17 +63,19 @@ test('the pass clears all active enemies, retains XP and records a single hazard
   const run = createRun(19)
   run.nextAttack = Infinity
   run.nextSpawn = Infinity
-  const enemyCount = run.enemies.filter(enemy => enemy.active).length
   const shortcut = getShortcut(run, 0)
+  const enemyCount = run.enemies.filter(enemy => enemy.active).length
   assert.equal(shortcut.kind, 'pass')
   assert.equal(run.kills, 0)
   const accept = { ...IDLE_INPUT, accept: true }
   assert.ok(advanceRun(run, accept) & Signal.clear)
   assert.equal(run.kills, enemyCount)
   assert.equal(run.enemies.some(enemy => enemy.active), false)
-  assert.equal(run.shards.filter(shard => shard.active).length + run.xp, enemyCount)
+  assert.equal(run.shards.filter(shard => shard.active).length, enemyCount)
   assert.equal(hazardValue(run), 1)
   assert.equal(waveCount(run), 2)
+  assert.equal(run.incident, null)
+  assert.equal(run.inspections.length, 0)
   advanceRun(run, accept)
   assert.equal(run.accepted.length, 1)
 })
@@ -82,7 +84,10 @@ test('beautification boost expires exactly after twelve seconds and narrows the 
   const run = createRun(19)
   emptyFloor(run)
   const shortcut = getShortcut(run, 1)
+  emptyFloor(run)
   assert.equal(shortcut.kind, 'beautifier')
+  run.ranks.caliper = 1
+  run.tools[0].active = false
   const baseline = attackInterval(run)
   advanceRun(run, { ...IDLE_INPUT, accept: true })
   assert.equal(attackInterval(run), baseline / 2)
@@ -213,4 +218,77 @@ test('the training pass and training pickups are isolated from a new shift', () 
   assert.equal(run.training, false)
   assert.equal(run.ranks.caliper, 0)
   assert.equal(hazardValue(run), 0)
+})
+
+test('first batch is marked before the choice and supplies a real group for inspection', () => {
+  const run = createRun(123)
+  emptyFloor(run)
+  run.player.protectedUntil = Infinity
+  run.nextAttack = Infinity
+  run.tick = SHORTCUT_TICKS[0] - 2 * HZ - 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.incidentWarning)
+  assert.equal(run.incident?.stage, 'warning')
+  assert.equal(run.shortcuts.length, 0)
+  assert.equal(run.enemies.some(enemy => enemy.active), false)
+  while (run.tick < SHORTCUT_TICKS[0]) advanceRun(run, IDLE_INPUT)
+  assert.equal(run.incident?.stage, 'open')
+  assert.equal(run.enemies.filter(enemy => enemy.active && enemy.batch === 0).length, 18)
+  assert.ok(run.incident?.shortcut.active)
+})
+
+test('inspection requires staying put, isolates only its batch and closes the shortcut', () => {
+  const run = createRun(33)
+  run.nextAttack = Infinity
+  run.nextSpawn = Infinity
+  run.player.protectedUntil = Infinity
+  run.player.hp = 72
+  const shortcut = getShortcut(run, 0)
+  const station = run.incident!.inspection
+  run.player.x = station.x
+  run.player.z = station.z
+  for (let i = 0; i < INSPECTION_HOLD - 4; i++) advanceRun(run, IDLE_INPUT)
+  assert.equal(station.held, INSPECTION_HOLD - 4)
+  run.player.x = station.x + 1.6
+  advanceRun(run, IDLE_INPUT)
+  assert.equal(station.held, 0)
+  run.player.x = station.x
+  for (let i = 0; i < INSPECTION_HOLD - 1; i++) advanceRun(run, IDLE_INPUT)
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.inspection)
+  assert.equal(run.inspections[0].isolated, 18)
+  assert.equal(run.inspections[0].recovery, 12)
+  assert.ok(run.enemies.some(enemy => enemy.active && enemy.batch < 0))
+  assert.equal(shortcut.active, false)
+  assert.equal(run.incident, null)
+  assert.equal(hazardValue(run), 0)
+})
+
+test('an unused incident expires without logging a decision or removing its parts', () => {
+  const run = createRun(95)
+  emptyFloor(run)
+  run.nextAttack = Infinity
+  run.player.protectedUntil = Infinity
+  const shortcut = getShortcut(run, 0)
+  run.tick = run.incident!.closesAt - 1
+  assert.ok(advanceRun(run, { ...IDLE_INPUT, accept: true }) & Signal.incidentClosed)
+  assert.equal(shortcut.active, false)
+  assert.equal(run.incident, null)
+  assert.equal(run.inspections.length, 0)
+  assert.equal(hazardValue(run), 0)
+  assert.ok(run.enemies.some(enemy => enemy.active && enemy.batch === 0))
+})
+
+test('the calibrated file delivers the higher previewed damage in four strokes', () => {
+  const run = createRun(81)
+  emptyFloor(run)
+  run.nextAttack = Infinity
+  const part = run.enemies[0]
+  Object.assign(part, { active: true, x: 1.55, z: 0.6, speed: .1, hp: 250 })
+  run.ranks.file = 3
+  const expected = previewToolStats(run, 'file', 3).damage
+  assert.ok(expected > previewToolStats(run, 'file', 2).damage)
+  advanceRun(run, IDLE_INPUT)
+  assert.equal(part.fileHits, 4)
+  for (let i = 0; i < 36; i++) advanceRun(run, IDLE_INPUT)
+  assert.equal(part.fileHits, 0)
+  assert.ok(Math.abs(part.hp - (250 - expected)) < .0001)
 })

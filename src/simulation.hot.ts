@@ -6,6 +6,22 @@ export const MAX_SHARDS = 480
 export const MAX_BOLTS = 90
 export const ARENA = { x: 14.2, z: 8.8 }
 export const SHORTCUT_TICKS = [50 * HZ, 100 * HZ, 150 * HZ] as const
+export const INSPECTION_HOLD = 96
+export const INSPECTION_RADIUS = 1.36
+export const INCIDENTS = [
+  { title: '待检件夹击', batch: '首批装配件', detail: '两侧涌入一批待检件。复检圈位于两路之间。' },
+  { title: '试验数据异常', batch: '试验数据批次', detail: '两侧出现异常数据，留意蓄力方向，沿中间通行。' },
+  { title: '交付催验', batch: '末批待验件', detail: '末批零件与异常数据同时涌入。可在交付前复检这一批。' },
+] as const
+
+const incidentBatches: ReadonlyArray<readonly EnemyKind[]> = [
+  [...Array<EnemyKind>(16).fill('blank'), 'bolt', 'bolt'],
+  ['phantom', 'phantom', 'blank', 'blank', 'bolt', 'blank', 'phantom', 'phantom', 'blank', 'bolt',
+   'blank', 'phantom', 'phantom', 'blank', 'bolt', 'blank', 'phantom', 'bolt', 'blank', 'blank'],
+  ['bolt', 'bolt', 'phantom', 'blank', 'blank', 'phantom', 'blank', 'blank', 'blank', 'phantom',
+   'bolt', 'blank', 'blank', 'blank', 'phantom', 'phantom', 'bolt', 'blank', 'blank', 'blank',
+   'phantom', 'blank', 'bolt', 'bolt', 'blank', 'blank'],
+]
 export const BOSS_HP = 6800
 const TAU = Math.PI * 2
 
@@ -23,6 +39,9 @@ export const Signal = {
   offer: 1024,
   toolDrop: 2048,
   toolPickup: 4096,
+  incidentWarning: 8192,
+  inspection: 16384,
+  incidentClosed: 32768,
 } as const
 
 export const UPGRADES = {
@@ -72,6 +91,42 @@ export type ToolKind = 'caliper' | WeaponId
 const TOOL_DROP_TICKS = [18, 45, 78, 116, 154].map(seconds => seconds * HZ)
 export const MAX_WEAPON_RANK = 5
 
+export const CALIBRATIONS = {
+  caliper: '增加一处自动复测，额外命中一个邻近零件。',
+  wrench: '扩大重击角度，可以打断冲撞中的螺栓。',
+  file: '由三次锉削改为四次，总伤害还有额外加成。',
+  saw: '加宽锯切范围，一次能扫到更宽的一排。',
+  tape: '加宽卷尺命中线，覆盖挨得更开的零件。',
+  mallet: '加大击退力度，把围上来的零件推得更远。',
+} satisfies Record<ToolKind, string>
+
+function toolDamage(run: Run, id: ToolKind, rank: number) {
+  if (id === 'caliper') return 22 + 7 * run.ranks.power + 7 * (rank - 1)
+  const base = weaponInfo[id].damage + (rank - 1) * 9 + run.ranks.power * 2
+  return id === 'file' && rank >= 3 ? Math.round(base * 1.20) : base
+}
+
+function toolReach(run: Run, id: ToolKind, rank: number) {
+  return id === 'caliper'
+    ? 6.2 + 0.95 * run.ranks.reach + .33 * (rank - 1)
+    : weaponInfo[id].reach + (rank - 1) * .31
+}
+
+function toolInterval(run: Run, id: ToolKind, rank: number) {
+  return id === 'caliper'
+    ? Math.max(14, 36 - 5 * run.ranks.tempo - 2 * (rank - 1))
+    : weaponInfo[id].delay - run.ranks.tempo * 5 - (rank - 1) * 6
+}
+
+export function previewToolStats(run: Run, id: ToolKind, rank: number) {
+  return {
+    damage: toolDamage(run, id, rank),
+    reach: toolReach(run, id, rank),
+    interval: toolInterval(run, id, rank) / HZ,
+  }
+}
+
+
 export function isWeapon(id: UpgradeId): id is WeaponId {
   return Object.hasOwn(weaponInfo, id)
 }
@@ -83,7 +138,7 @@ export function weaponCount(run: Run) {
 }
 export type ShortcutKind = keyof typeof SHORTCUTS
 export type EnemyKind = 'blank' | 'bolt' | 'phantom'
-export type EffectKind = 'slice' | 'hit' | 'dash' | 'pickup' | 'clear' | 'arrival' | 'toolPickup' | WeaponId
+export type EffectKind = 'slice' | 'hit' | 'dash' | 'pickup' | 'clear' | 'arrival' | 'toolPickup' | 'inspection' | WeaponId
 export type Outcome = 'qualified' | 'repair' | 'stopped'
 export type Input = { x: number; z: number; dash: boolean; accept: boolean }
 
@@ -95,6 +150,7 @@ export const IDLE_INPUT: Input = { x: 0, z: 0, dash: false, accept: false }
 interface Filing { fileAt: number; fileHits: number; fileDamage: number }
 
 export interface Enemy extends Filing {
+  batch: number
   active: boolean
   kind: EnemyKind
   x: number
@@ -134,6 +190,18 @@ export interface Shortcut {
   kind: ShortcutKind
   x: number
   z: number
+}
+
+type IncomingPart = { kind: EnemyKind; x: number; z: number }
+
+export interface Incident {
+  slot: number
+  stage: 'warning' | 'open'
+  opensAt: number
+  closesAt: number
+  shortcut: Shortcut
+  parts: IncomingPart[]
+  inspection: { x: number; z: number; held: number }
 }
 
 export interface RunEffect {
@@ -188,6 +256,8 @@ export interface Run {
   shards: Shard[]
   projectiles: Bolt[]
   shortcuts: Shortcut[]
+  incident: Incident | null
+  inspections: { slot: number; tick: number; isolated: number; recovery: number }[]
   tools: ToolDrop[]
   nextTool: number
   lastToolPicked: ToolKind | null
@@ -237,7 +307,7 @@ function random(run: Run) {
 
 function emptyEnemy(): Enemy {
   return {
-    active: false, kind: 'blank', x: 0, z: 0, hp: 0, speed: 0, radius: 0,
+    batch: -1, active: false, kind: 'blank', x: 0, z: 0, hp: 0, speed: 0, radius: 0,
     facing: 1, mode: 0, until: 0, actionAt: 0, dx: 0, dz: 0, flashUntil: 0,
     fileAt: 0, fileHits: 0, fileDamage: 0,
   }
@@ -255,7 +325,7 @@ export function createRun(seed = 0x41c603a1): Run {
     enemies: Array.from({ length: MAX_ENEMIES }, emptyEnemy),
     shards: Array.from({ length: MAX_SHARDS }, () => ({ active: false, x: 0, z: 0, value: 0, phase: 0 })),
     projectiles: Array.from({ length: MAX_BOLTS }, () => ({ active: false, x: 0, z: 0, dx: 0, dz: 0 })),
-    shortcuts: [],
+    shortcuts: [], incident: null, inspections: [],
     tools: [{ active: true, kind: 'caliper', x: 1.55, z: 0.6 }], nextTool: 0, lastToolPicked: null,
     effects: Array.from({ length: 64 }, () => ({ kind: 'hit', x: 0, z: 0, toX: 0, toZ: 0, from: 0, until: 0 })),
     waves: Array.from({ length: 12 }, () => ({
@@ -296,7 +366,7 @@ export function waveGapDegrees(run: Run) {
 }
 
 export function attackInterval(run: Run) {
-  const normal = Math.max(14, 36 - 5 * run.ranks.tempo - 2 * (run.ranks.caliper - 1))
+  const normal = toolInterval(run, 'caliper', run.ranks.caliper)
   return run.tick < run.boostUntil ? Math.ceil(normal / 2) : normal
 }
 
@@ -304,7 +374,7 @@ export function angleDistance(a: number, b: number) {
   return Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)))
 }
 
-function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number) {
+function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1) {
   const enemies = run.enemies
   for (let i = 0; i < enemies.length; i++) {
     const index = (run.enemyCursor + i) % enemies.length
@@ -313,11 +383,12 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number) {
     const time = run.tick / BOSS_TICK
     enemy.active = true
     enemy.kind = kind
+    enemy.batch = batch
     enemy.x = clamp(x, -ARENA.x + 0.4, ARENA.x - 0.4)
     enemy.z = clamp(z, -ARENA.z + 0.4, ARENA.z - 0.4)
     enemy.hp = kind === 'bolt' ? 46 + 16 * time : kind === 'phantom' ? 27 + 12 * time : 16 + 8 * time
     const speed = kind === 'bolt' ? 1.45 : kind === 'phantom' ? 1.66 : 2.05
-    enemy.speed = speed + time * 0.46 + random(run) * 0.28
+    enemy.speed = speed + time * 0.46 + random(run) * 0.28 + (batch < 0 ? 0 : .27)
     enemy.radius = kind === 'bolt' ? 0.53 : 0.40
     enemy.facing = 1
     enemy.mode = 0
@@ -419,8 +490,9 @@ function damageEnemy(run: Run, enemy: Enemy, damage: number) {
 function attack(run: Run) {
   if (!run.ranks.caliper || run.tick < run.nextAttack) return 0
   const player = run.player
-  const reach = 6.2 + 0.95 * run.ranks.reach + .33 * (run.ranks.caliper - 1)
-  const damage = 22 + 7 * run.ranks.power + 7 * (run.ranks.caliper - 1)
+  const rank = run.ranks.caliper
+  const reach = toolReach(run, 'caliper', rank)
+  const damage = toolDamage(run, 'caliper', rank)
   const enemy = nearestEnemy(run, player.x, player.z, reach)
   const boss = run.boss
   const bossDistance = Math.hypot(player.x - boss.x, player.z - boss.z)
@@ -431,11 +503,12 @@ function attack(run: Run) {
   } else if (enemy) {
     addEffect(run, 'slice', player.x, player.z, enemy.x, enemy.z, 12)
     damageEnemy(run, enemy, damage)
-    if (run.ranks.sweep > 0) {
+    const followUps = run.ranks.sweep + (rank >= 3 ? 1 : 0)
+    if (followUps > 0) {
       let hit = 0
       const area = 3.4 + 0.28 * run.ranks.sweep
       for (const extra of run.enemies) {
-        if (hit >= run.ranks.sweep) break
+        if (hit >= followUps) break
         if (!extra.active || extra === enemy) continue
         if (Math.hypot(extra.x - enemy.x, extra.z - enemy.z) > area) continue
         damageEnemy(run, extra, damage * 0.76)
@@ -450,9 +523,9 @@ function attack(run: Run) {
   return Signal.strike
 }
 
-function applyFiling(target: Filing, tick: number, damage: number) {
-  target.fileDamage = damage / 3
-  target.fileHits = 3
+function applyFiling(target: Filing, tick: number, damage: number, strokes: number) {
+  target.fileDamage = damage / strokes
+  target.fileHits = strokes
   target.fileAt = tick + 3
 }
 
@@ -463,14 +536,14 @@ function damageBoss(run: Run, damage: number) {
   addEffect(run, 'hit', boss.x, boss.z, 0, 0, 12)
 }
 
-function inToolShape(id: WeaponId, x: number, z: number, dx: number, dz: number, reach: number) {
+function inToolShape(id: WeaponId, x: number, z: number, dx: number, dz: number, reach: number, calibrated: boolean) {
   const distance = Math.hypot(x, z)
   if (id === 'mallet') return distance <= reach
   const forward = x * dx + z * dz
   if (forward < 0 || forward > reach) return false
-  if (id === 'wrench') return distance <= reach && forward >= distance * .52
+  if (id === 'wrench') return distance <= reach && forward >= distance * (calibrated ? .30 : .52)
   const side = Math.abs(z * dx - x * dz)
-  return side <= (id === 'saw' ? 1.18 : .52)
+  return side <= (id === 'saw' ? (calibrated ? 1.71 : 1.18) : (calibrated ? .82 : .52))
 }
 
 function attackWeapons(run: Run) {
@@ -479,8 +552,8 @@ function attackWeapons(run: Run) {
   for (const id of WEAPON_IDS) {
     const rank = run.ranks[id]
     if (rank === 0 || run.tick < run.weaponReady[id]) continue
-    const info = weaponInfo[id]
-    const reach = info.reach + (rank - 1) * .31
+    const calibrated = rank >= 3
+    const reach = toolReach(run, id, rank)
     const boss = run.boss
     const enemy = nearestEnemy(run, player.x, player.z, reach)
     const bossDistance = Math.hypot(boss.x - player.x, boss.z - player.z)
@@ -494,35 +567,36 @@ function attackWeapons(run: Run) {
     const distance = Math.hypot(dx, dz)
     const dirX = distance > .01 ? dx / distance : player.facing
     const dirZ = distance > .01 ? dz / distance : 0
-    const damage = info.damage + (rank - 1) * 9 + run.ranks.power * 2
+    const damage = toolDamage(run, id, rank)
 
     if (id === 'file') {
-      applyFiling(aimBoss ? boss : enemy!, run.tick, damage)
+      applyFiling(aimBoss ? boss : enemy!, run.tick, damage, calibrated ? 4 : 3)
       addEffect(run, id, player.x, player.z, targetX, targetZ, 29)
     } else {
       for (const target of run.enemies) {
         if (!target.active ||
-            !inToolShape(id, target.x - player.x, target.z - player.z, dirX, dirZ, reach)) continue
+            !inToolShape(id, target.x - player.x, target.z - player.z, dirX, dirZ, reach, calibrated)) continue
         damageEnemy(run, target, damage)
         if (!target.active) continue
-        if (id === 'wrench' && target.kind === 'bolt' && target.mode === 1) {
+        if (id === 'wrench' && target.kind === 'bolt' && (target.mode === 1 || (calibrated && target.mode === 2))) {
           target.mode = 0
           target.actionAt = run.tick + 77
         } else if (id === 'mallet') {
           const awayX = target.x - player.x
           const awayZ = target.z - player.z
           const length = Math.hypot(awayX, awayZ) || 1
-          target.x = clamp(target.x + awayX / length * 1.05, -ARENA.x + .3, ARENA.x - .3)
-          target.z = clamp(target.z + awayZ / length * 1.05, -ARENA.z + .3, ARENA.z - .3)
+          const push = calibrated ? 1.65 : 1.05
+          target.x = clamp(target.x + awayX / length * push, -ARENA.x + .3, ARENA.x - .3)
+          target.z = clamp(target.z + awayZ / length * push, -ARENA.z + .3, ARENA.z - .3)
         }
       }
-      if (boss.active && inToolShape(id, boss.x - player.x, boss.z - player.z, dirX, dirZ, reach + .45)) {
+      if (boss.active && inToolShape(id, boss.x - player.x, boss.z - player.z, dirX, dirZ, reach + .45, calibrated)) {
         damageBoss(run, damage)
       }
       addEffect(run, id, player.x, player.z, player.x + dirX * reach, player.z + dirZ * reach, 28)
     }
 
-    const delay = info.delay - run.ranks.tempo * 5 - (rank - 1) * 6
+    const delay = toolInterval(run, id, rank)
     run.weaponReady[id] = run.tick + (run.tick < run.boostUntil ? Math.ceil(delay / 2) : delay)
     signal |= Signal.strike
   }
@@ -753,23 +827,108 @@ export function nearestShortcut(run: Run, limit = 2.25) {
   return nearest
 }
 
-function offerShortcut(run: Run) {
-  const slot = run.nextShortcut
-  const kind: ShortcutKind = slot === 0 ? 'pass' : slot === 1 ? 'beautifier' : random(run) < 0.5 ? 'pass' : 'beautifier'
-  const angle = random(run) * TAU
-  const offsetX = Math.cos(angle) * 3.9
-  const offsetZ = Math.sin(angle) * 3.9
+function prepareIncident(run: Run, slot: number) {
+  const kind: ShortcutKind = slot === 0 ? 'pass' : slot === 1 ? 'beautifier' : random(run) < .5 ? 'pass' : 'beautifier'
   const player = run.player
-  const x = Math.abs(player.x + offsetX) < ARENA.x - 1.1 ? player.x + offsetX : player.x - offsetX
-  const z = Math.abs(player.z + offsetZ) < ARENA.z - 1.1 ? player.z + offsetZ : player.z - offsetZ
-  run.shortcuts.push({ active: true, kind, x, z })
+  const x = clamp(player.x, -8.9, 8.9)
+  const z = clamp(player.z, -4.15, 4.15)
+  const dx = Math.abs(x) > 1.75 || Math.abs(z) <= 1.5 ? (x > 0 ? -1 : 1) : 0
+  const dz = dx === 0 ? (z > 0 ? -1 : 1) : 0
+  const sideX = -dz
+  const sideZ = dx
+  const composition = incidentBatches[slot]
+  const parts: IncomingPart[] = []
+  for (let i = 0; i < composition.length; i++) {
+    const side = i % 2 === 0 ? 1 : -1
+    const row = Math.floor(i / 14)
+    const front = (Math.floor(i / 2) % 7 - 3) * 1.10
+    const flank = (4.55 + row * 1.16 + random(run) * .40) * side
+    parts.push({
+      kind: composition[i],
+      x: clamp(x + dx * front + sideX * flank, -ARENA.x + .62, ARENA.x - .62),
+      z: clamp(z + dz * front + sideZ * flank, -ARENA.z + .62, ARENA.z - .62),
+    })
+  }
+  run.incident = {
+    slot,
+    stage: 'warning',
+    opensAt: SHORTCUT_TICKS[slot],
+    closesAt: SHORTCUT_TICKS[slot] + 14 * HZ,
+    parts,
+    shortcut: { active: false, kind, x: x + dx * .80, z: z + dz * .80 },
+    inspection: { x: x + dx * 5.15, z: z + dz * 5.15, held: 0 },
+  }
+}
+
+function openIncident(run: Run, incident: Incident) {
+  incident.stage = 'open'
+  incident.shortcut.active = true
+  run.shortcuts.push(incident.shortcut)
+  for (const part of incident.parts) {
+    spawnEnemy(run, part.kind, part.x, part.z, incident.slot)
+  }
   run.nextShortcut++
+}
+
+function closeIncident(run: Run) {
+  if (!run.incident) return
+  run.incident.shortcut.active = false
+  run.incident = null
+}
+
+function advanceIncident(run: Run) {
+  if (run.incident?.stage === 'open' && run.tick >= run.incident.closesAt) {
+    closeIncident(run)
+    return Signal.incidentClosed
+  }
+  if (run.training || run.nextShortcut >= SHORTCUT_TICKS.length) return 0
+  const slot = run.nextShortcut
+  const opensAt = SHORTCUT_TICKS[slot]
+  let signal = 0
+  if (!run.incident && run.tick >= opensAt - 2 * HZ) {
+    prepareIncident(run, slot)
+    signal |= Signal.incidentWarning
+  }
+  const incident = run.incident
+  if (incident?.stage === 'warning' && run.tick >= opensAt) {
+    openIncident(run, incident)
+    signal |= Signal.offer
+  }
+  return signal
+}
+
+function progressInspection(run: Run) {
+  const incident = run.incident
+  if (!incident || incident.stage !== 'open') return 0
+  const { inspection, slot } = incident
+  const player = run.player
+  const inZone = Math.hypot(player.x - inspection.x, player.z - inspection.z) <= INSPECTION_RADIUS
+  if (!inZone || run.tick < player.dashUntil) {
+    inspection.held = 0
+    return 0
+  }
+  inspection.held++
+  if (inspection.held < INSPECTION_HOLD) return 0
+
+  let isolated = 0
+  for (const enemy of run.enemies) {
+    if (!enemy.active || enemy.batch !== slot) continue
+    defeatEnemy(run, enemy)
+    isolated++
+  }
+  const previousHp = player.hp
+  player.hp = Math.min(player.maximumHp, previousHp + 12)
+  run.inspections.push({ slot, tick: run.tick, isolated, recovery: player.hp - previousHp })
+  addEffect(run, 'inspection', inspection.x, inspection.z, 0, 0, 54)
+  closeIncident(run)
+  return Signal.inspection
 }
 
 function acceptShortcut(run: Run) {
   const shortcut = nearestShortcut(run, 1.65)
   if (!shortcut) return 0
   shortcut.active = false
+  if (run.incident?.shortcut === shortcut) closeIncident(run)
   run.accepted.push({ kind: shortcut.kind, tick: run.tick })
   addEffect(run, 'pickup', shortcut.x, shortcut.z, 0, 0, 42)
   if (shortcut.kind === 'pass') {
@@ -784,7 +943,7 @@ function acceptShortcut(run: Run) {
   run.boostUntil = run.tick + 12 * HZ
   run.nextAttack = Math.min(run.nextAttack, run.tick + attackInterval(run))
   for (const weapon of WEAPON_IDS) {
-    const halfway = run.tick + Math.ceil((weaponInfo[weapon].delay - run.ranks.tempo * 5 - Math.max(0, run.ranks[weapon] - 1) * 6) / 2)
+    const halfway = run.tick + Math.ceil(toolInterval(run, weapon, Math.max(1, run.ranks[weapon])) / 2)
     run.weaponReady[weapon] = Math.min(run.weaponReady[weapon], halfway)
   }
   return Signal.shortcut
@@ -832,6 +991,7 @@ export function chooseUpgrade(run: Run, index: number) {
 }
 
 function introduceBoss(run: Run) {
+  closeIncident(run)
   run.phase = 'boss'
   for (const enemy of run.enemies) enemy.active = false
   for (const bolt of run.projectiles) bolt.active = false
@@ -898,6 +1058,7 @@ function progressWaves(run: Run) {
 }
 
 function endRun(run: Run, cause: 'health' | 'timeout' | 'boss') {
+  closeIncident(run)
   run.phase = 'ended'
   run.endCause = cause
   run.boss.active = false
@@ -922,10 +1083,7 @@ export function advanceRun(run: Run, input: Input) {
       signal |= Signal.toolDrop
     }
     if (run.tick >= run.nextSpawn) spawnPatrol(run)
-    if (run.nextShortcut < SHORTCUT_TICKS.length && run.tick >= SHORTCUT_TICKS[run.nextShortcut]) {
-      offerShortcut(run)
-      signal |= Signal.offer
-    }
+    signal |= advanceIncident(run)
     if (input.accept) signal |= acceptShortcut(run)
   }
 
@@ -947,6 +1105,7 @@ export function advanceRun(run: Run, input: Input) {
   }
 
   if (run.player.hp <= 0) return signal | endRun(run, 'health')
+  if (run.phase === 'floor') signal |= progressInspection(run)
   if (run.phase === 'boss' && run.boss.hp <= 0) return signal | endRun(run, 'boss')
   if (!run.training && run.tick >= END_TICK) return signal | endRun(run, 'timeout')
 
@@ -976,8 +1135,19 @@ export function placePracticeSamples(run: Run) {
 
 export function placePracticePass(run: Run) {
   const { player } = run
-  const x = player.x + (player.x > ARENA.x - 4.5 ? -3.3 : 3.3)
-  run.shortcuts.push({ active: true, kind: 'pass', x, z: player.z })
+  const direction = player.x > ARENA.x - 6.15 ? -1 : 1
+  const x = player.x + direction * 1.9
+  const shortcut: Shortcut = { active: true, kind: 'pass', x, z: player.z }
+  run.shortcuts.push(shortcut)
+  run.incident = {
+    slot: 0,
+    stage: 'open',
+    opensAt: run.tick,
+    closesAt: Infinity,
+    shortcut,
+    parts: [],
+    inspection: { x: player.x + direction * 4.85, z: player.z, held: 0 },
+  }
   run.nextAttack = Infinity
   for (const weapon of WEAPON_IDS) run.weaponReady[weapon] = Infinity
   run.xp = 0
@@ -986,7 +1156,7 @@ export function placePracticePass(run: Run) {
   for (const enemy of run.enemies) enemy.active = false
   for (let i = 0; i < 10; i++) {
     const angle = i * TAU / 10
-    spawnEnemy(run, 'blank', x + Math.cos(angle) * (3.7 + i * .12), player.z + Math.sin(angle) * 4.0)
+    spawnEnemy(run, 'blank', x + Math.cos(angle) * (3.7 + i * .12), player.z + Math.sin(angle) * 4.0, 0)
     run.enemies[(run.enemyCursor - 1 + run.enemies.length) % run.enemies.length].speed = .46
   }
 }

@@ -44,6 +44,9 @@
             <span><kbd>空格</kbd> 冲刺</span>
             <span><kbd>E</kbd> 拾取捷径</span>
           </div>
+          <div class="control-legend touch-legend" aria-label="触控操作说明">
+            <span><kbd>拖动</kbd> 走位</span><span><kbd>快划</kbd> 冲刺</span><span><kbd>点按</kbd> 升级</span>
+          </div>
         </div>
         <div class="title-shift"><span>事故处置</span><strong>03:30</strong></div>
       </section>
@@ -70,6 +73,16 @@
         <div class="boss-meter" id="boss-meter" hidden>
           <div class="meter-label"><span>失稳试验台</span><strong id="wave-info">1 道波 · 缺口 100°</strong></div>
           <div class="meter"><div id="boss-fill"></div></div>
+        </div>
+
+        <section class="incident-panel" id="incident-panel" hidden aria-label="班次事件">
+          <div><strong id="incident-title"></strong><time id="incident-time"></time></div>
+          <p id="incident-detail"></p>
+        </section>
+        <div class="inspection-card" id="inspection-card" hidden>
+          <div><strong>合规复检</strong><span id="inspection-progress">0%</span></div>
+          <span id="inspection-hint">圈内停留 1.6 秒，隔离本批待检件</span>
+          <div class="meter" aria-hidden="true"><div id="inspection-fill"></div></div>
         </div>
         <div class="toast" role="status" id="toast" hidden><strong id="toast-title"></strong><span id="toast-detail"></span></div>
         <div class="tool-card" id="tool-card" hidden><strong id="tool-name"></strong><span>靠近拾取 · 解锁 Lv.1</span></div>
@@ -128,7 +141,7 @@
             <div><dt>质量隐患</dt><dd id="end-risk"></dd></div>
           </dl>
           <div class="report-history">
-            <h3>隐患追溯</h3>
+            <h3>处置追溯</h3>
             <ul id="end-log"></ul>
           </div>
           <div class="dialog-buttons">

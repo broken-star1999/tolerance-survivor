@@ -4,7 +4,7 @@ import {
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
-import { ARENA, HZ, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { ARENA, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
 import { createSpriteAtlas, type SpriteName } from './sprites.ts'
 import { createWorkshop } from './workshop.ts'
 
@@ -227,7 +227,7 @@ export function createGameView(host: HTMLElement) {
   const sprites = new SpriteBatch(atlas)
   world.add(sprites.mesh)
   const shadows = makeFloorBatch(new CircleGeometry(1, 17), 200, .62)
-  const markings = makeFloorBatch(new RingGeometry(.89, 1, 42), 35, .75)
+  const markings = makeFloorBatch(new RingGeometry(.89, 1, 42), 64, .75)
   const strips = makeFloorBatch(new BoxGeometry(1, .022, 1), 350, .82)
   shadows.renderOrder = 1
   markings.renderOrder = 4
@@ -348,7 +348,7 @@ export function createGameView(host: HTMLElement) {
     }
   }
 
-function drawToolEffect(effect: RunEffect, progress: number) {
+  function drawToolEffect(effect: RunEffect, progress: number, run: Run) {
     const dx = effect.toX - effect.x
     const dz = effect.toZ - effect.z
     const reach = Math.hypot(dx, dz)
@@ -364,8 +364,9 @@ function drawToolEffect(effect: RunEffect, progress: number) {
       const endZ = effect.z + dz * length
       line(effect.x, effect.z, endX, endZ, .17, GOLD, .12)
       const steps = Math.floor(reach * length / .45)
-      const sideX = -Math.sin(heading) * .15
-      const sideZ = Math.cos(heading) * .15
+      const width = run.ranks.tape >= 3 ? .29 : .15
+      const sideX = -Math.sin(heading) * width
+      const sideZ = Math.cos(heading) * width
       for (let i = 1; i <= steps; i++) {
         const fraction = i * .45 / Math.max(.01, reach)
         const x = effect.x + dx * fraction
@@ -374,12 +375,13 @@ function drawToolEffect(effect: RunEffect, progress: number) {
       }
     } else if (effect.kind === 'mallet') {
       marker(effect.x, effect.z, .6 + progress * reach, GOLD, .071)
-      marker(effect.x, effect.z, .34 + progress * reach * .75, RUST, .073)
+      marker(effect.x, effect.z, .34 + progress * reach * (run.ranks.mallet >= 3 ? .92 : .75), RUST, .073)
     } else if (effect.kind === 'wrench') {
       const radius = .46 + reach * (.34 + .38 * progress)
       for (let i = 0; i < 7; i++) {
-        const a = heading - .9 + i * .29
-        const b = a + .27
+        const spread = run.ranks.wrench >= 3 ? 1.26 : .91
+        const a = heading - spread + i * (spread * 2 / 7)
+        const b = a + spread * .28
         line(effect.x + Math.cos(a) * radius, effect.z + Math.sin(a) * radius, effect.x + Math.cos(b) * radius, effect.z + Math.sin(b) * radius, .21 * (1 - progress) + .035, GOLD, .11)
       }
     } else if (effect.kind === 'saw') {
@@ -387,14 +389,53 @@ function drawToolEffect(effect: RunEffect, progress: number) {
       const sideZ = Math.cos(heading)
       for (let i = 0; i < 8; i++) {
         const along = .13 + i * .1
-        const side = (i % 2 ? .46 : -.46) + Math.sin(progress * 10) * .23
+        const spread = run.ranks.saw >= 3 ? .7 : .46
+        const side = (i % 2 ? spread : -spread) + Math.sin(progress * 10) * .23
         line(effect.x + dx * along + sideX * side, effect.z + dz * along + sideZ * side, effect.x + dx * (along + .12) - sideX * side, effect.z + dz * (along + .12) - sideZ * side, .073, i % 2 ? ICE : MINT, .13)
       }
     }
   }
 
+  function drawIncident(run: Run) {
+    const incident = run.incident
+    if (!incident || run.phase !== 'floor') return
+    const { inspection, shortcut } = incident
+    const sweep = .5 + .5 * Math.sin(run.tick * .13)
+    if (incident.stage === 'warning') {
+      for (let i = 0; i < incident.parts.length; i++) {
+        const part = incident.parts[i]
+        const tone = part.kind === 'phantom' ? LILAC : RUST
+        marker(part.x, part.z, .52 + sweep * .23, tone)
+        line(part.x - .21, part.z - .21, part.x + .21, part.z + .21, .055, tone)
+        line(part.x - .21, part.z + .21, part.x + .21, part.z - .21, .055, tone)
+      }
+      return
+    }
+
+    const vx = inspection.x - shortcut.x
+    const vz = inspection.z - shortcut.z
+    const angle = Math.atan2(vz, vx)
+    for (let index = 1; index <= 2; index++) {
+      const step = index * .25
+      drawDashMark(shortcut.x + vx * step, shortcut.z + vz * step, angle, .56)
+    }
+    marker(inspection.x, inspection.z, INSPECTION_RADIUS, MINT, .05)
+    marker(inspection.x, inspection.z, INSPECTION_RADIUS + .14 + .08 * sweep, ICE, .052)
+    line(inspection.x - .27, inspection.z, inspection.x + .27, inspection.z, .079, MINT, .071)
+    line(inspection.x, inspection.z - .27, inspection.x, inspection.z + .27, .079, MINT, .071)
+    const lit = Math.floor(20 * inspection.held / INSPECTION_HOLD)
+    for (let index = 0; index < lit; index++) {
+      const a = index * TAU / 20 - Math.PI / 2
+      const b = a + .27
+      const radius = INSPECTION_RADIUS + .06
+      line(inspection.x + Math.cos(a) * radius, inspection.z + Math.sin(a) * radius,
+        inspection.x + Math.cos(b) * radius, inspection.z + Math.sin(b) * radius, .13, MINT, .079)
+    }
+  }
+
   function drawFloor(run: Run) {
     const time = run.tick / HZ
+    drawIncident(run)
     for (const shard of run.shards) {
       if (!shard.active) continue
       const pulse = .5 + .5 * Math.sin(time * 6 + shard.phase)
@@ -478,12 +519,24 @@ function drawToolEffect(effect: RunEffect, progress: number) {
       } else if (effect.kind === 'clear') {
         marker(effect.x, effect.z, .9 + progress * 13, GOLD, .055)
         marker(effect.x, effect.z, .4 + progress * 9.8, MINT, .056)
+        for (let i = 0; i < 12; i++) {
+          const angle = i * TAU / 12
+          const radius = .8 + progress * 12.9
+          const trail = Math.max(.1, radius - 1.28)
+          const dx = Math.cos(angle)
+          const dz = Math.sin(angle)
+          line(effect.x + dx * trail, effect.z + dz * trail,
+            effect.x + dx * radius, effect.z + dz * radius, .12 - .055 * progress, GOLD, .078)
+        }
+      } else if (effect.kind === 'inspection') {
+        marker(effect.x, effect.z, .6 + progress * 5.6, MINT, .058)
+        marker(effect.x, effect.z, .34 + progress * 3.25, ICE, .06)
       } else if (effect.kind === 'toolPickup') {
         marker(effect.x, effect.z, .46 + progress * 2.1, MINT, .054)
       } else if (effect.kind === 'pickup' || effect.kind === 'arrival') {
         marker(effect.x, effect.z, .5 + progress * (effect.kind === 'arrival' ? 5.8 : 2.3), effect.kind === 'arrival' ? RUST : GOLD, .055)
       } else {
-        drawToolEffect(effect, progress)
+        drawToolEffect(effect, progress, run)
       }
     }
   }

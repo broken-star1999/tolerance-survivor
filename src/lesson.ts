@@ -8,7 +8,7 @@ export const LESSON_COPY = {
   dash: { number: 2, title: '练习冲刺', desktop: '按一下空格冲刺。等右下角进度条填满后，可以再次冲刺。', touch: '快速划动场地或点「冲刺」。进度条填满后可以再冲一次。' },
   collect: { number: 3, title: '测量与升级', desktop: '卡尺会自动打向附近样件。走近蓝色量块，量块集齐后选一张升级卡，强化已经捡到的卡尺。', touch: '卡尺会自动打向附近样件。走近蓝色量块，量块集齐后选一张升级卡，强化已经捡到的卡尺。' },
   equip: { number: 3, title: '试用新工具', desktop: '拾起绿色光圈里的扳手，看看它怎样重击样件。工具在拾取后从 Lv.1 开始，最高 Lv.5。', touch: '拾起绿色光圈里的扳手，看看它怎样重击样件。工具在拾取后从 Lv.1 开始，最高 Lv.5。' },
-  shortcut: { number: 4, title: '看看免检的代价', desktop: '走进黄色光圈，按 E 使用免检通行证。它会立刻清场，也会让隐患加 1。', touch: '走进黄色光圈，点「拾取」使用免检证。它会立刻清场，也会让隐患加 1。' },
+  shortcut: { number: 4, title: '看看免检的代价', desktop: '黄色光圈按 E 免检，立即清场并增加隐患。也可在绿色复检圈停留 1.6 秒。', touch: '黄色光圈点「拾取」免检，立即清场并增加隐患。也可在绿色复检圈停留 1.6 秒。' },
   wave: { number: 5, title: '从缺口躲开冲击波', desktop: '免检件进入装配后失效，试验台会多放一道冲击波。沿绿色箭头进入缺口。', touch: '免检件进入装配后失效，试验台会多放一道冲击波。沿绿色箭头进入缺口。' },
   done: { number: 5, title: '训练完成', desktop: '正式值班从 0 点隐患开始。拾取前先看收益和后果，也可以绕开捷径。', touch: '正式值班从 0 点隐患开始。拾取前先看收益和后果，也可以绕开捷径。' },
 } as const
@@ -44,7 +44,7 @@ export function advanceLesson(lesson: Lesson, run: Run, signal: number) {
       lesson.step = 'shortcut'
     }
   } else if (lesson.step === 'shortcut') {
-    if (signal & Signal.shortcut) {
+    if (signal & (Signal.shortcut | Signal.inspection)) {
       lesson.demonstrated = false
       lesson.waitUntil = run.tick + 92
     }

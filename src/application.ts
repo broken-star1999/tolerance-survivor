@@ -1,5 +1,6 @@
 import {
-  BOSS_HP, HZ, SHORTCUTS, Signal, UPGRADES, WEAPON_IDS, WEAPON_SLOTS, advanceRun, chooseUpgrade,
+  BOSS_HP, CALIBRATIONS, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS, Signal, UPGRADES,
+  WEAPON_IDS, WEAPON_SLOTS, advanceRun, chooseUpgrade, previewToolStats,
   createPracticeRun, createRun, hazardValue, isWeapon, nearestShortcut, nearestTool, waveCount, waveGapDegrees, weaponCount,
   type Input, type Run,
 } from './simulation.hot.ts'
@@ -58,6 +59,14 @@ export function createApplication() {
   const bossMeter = element('boss-meter')
   const bossFill = element('boss-fill')
   const waveInfo = element('wave-info')
+  const incidentPanel = element('incident-panel')
+  const incidentTitle = element('incident-title')
+  const incidentTime = element('incident-time')
+  const incidentDetail = element('incident-detail')
+  const inspectionCard = element('inspection-card')
+  const inspectionProgress = element('inspection-progress')
+  const inspectionHint = element('inspection-hint')
+  const inspectionFill = element('inspection-fill')
   const toast = element('toast')
   const toastTitle = element('toast-title')
   const toastDetail = element('toast-detail')
@@ -180,18 +189,46 @@ export function createApplication() {
     const dashDelay = Math.max(0, run.player.dashReadyAt - run.tick)
     text(dashText, dashDelay > 0 ? '冲刺恢复' : '冲刺就绪')
     meter(dashFill, 1 - dashDelay / 78)
+    const activeIncident = run.phase === 'floor' ? run.incident : null
+    incidentPanel.hidden = !activeIncident || !!lesson || run.choices.length > 0 || paused
+    stage.classList.toggle('incident-active', !incidentPanel.hidden)
+    if (activeIncident) {
+      const warning = activeIncident.stage === 'warning'
+      const profile = INCIDENTS[activeIncident.slot]
+      text(incidentTitle, profile.title)
+      text(incidentTime, Math.ceil(((warning ? activeIncident.opensAt : activeIncident.closesAt) - run.tick) / HZ) + ' 秒')
+      text(incidentDetail, warning ? profile.detail : '黄色捷径立即处理 · 绿色复检圈需停留 1.6 秒')
+      incidentPanel.dataset.stage = activeIncident.stage
+    }
+    const station = activeIncident?.stage === 'open' ? activeIncident.inspection : null
     const shortcut = run.phase === 'floor' ? nearestShortcut(run) : undefined
-    shortcutCard.hidden = !shortcut || Boolean(run.choices.length) || paused
+    const inspectionDistance = station ? Math.hypot(station.x - run.player.x, station.z - run.player.z) : Infinity
+    const shortcutDistance = shortcut ? Math.hypot(shortcut.x - run.player.x, shortcut.z - run.player.z) : Infinity
+    const hideControls = Boolean(run.choices.length) || paused
+    inspectionCard.hidden = !station || inspectionDistance > 3.15 || inspectionDistance > shortcutDistance || hideControls
+    if (station && !inspectionCard.hidden) {
+      const fraction = station.held / INSPECTION_HOLD
+      text(inspectionProgress, Math.floor(fraction * 100) + '%')
+      text(inspectionHint, inspectionDistance <= INSPECTION_RADIUS
+        ? '站稳，正在核验本批待检件'
+        : '圈内停留 1.6 秒，隔离本批待检件')
+      meter(inspectionFill, fraction)
+    }
+    shortcutCard.hidden = !shortcut || !inspectionCard.hidden || hideControls
     const ready = shortcut && nearestShortcut(run, 1.65) !== undefined
-    if (shortcut) {
+    if (shortcut && !shortcutCard.hidden) {
       const definition = SHORTCUTS[shortcut.kind]
       text(shortcutName, definition.name)
-      text(shortcutBenefit, definition.benefit)
+      if (shortcut.kind === 'pass') {
+        let remaining = 0
+        for (const enemy of run.enemies) if (enemy.active) remaining++
+        text(shortcutBenefit, '立刻清场 · ' + remaining + ' 件零件')
+      } else text(shortcutBenefit, definition.benefit)
       text(shortcutConsequence, definition.consequence + ' · ' + definition.trace)
       text(shortcutAction, ready ? '确认拾取' : '进入光圈后可拾取')
     }
     const tool = nearestTool(run)
-    toolCard.hidden = !tool || Boolean(run.choices.length) || paused || !!shortcut || run.phase === 'ended'
+    toolCard.hidden = !tool || Boolean(run.choices.length) || paused || !!shortcut || !inspectionCard.hidden || run.phase === 'ended'
     if (tool) text(toolName, UPGRADES[tool.kind].name)
     touchAccept.disabled = !ready
     touchDash.disabled = dashDelay > 0
@@ -205,6 +242,7 @@ export function createApplication() {
       const definition = UPGRADES[tool]
       const slot = document.createElement('span')
       slot.className = 'weapon-chip'
+      slot.classList.toggle('calibrated', run.ranks[tool] >= 3)
       slot.title = definition.name + ' · Lv.' + run.ranks[tool]
       slot.setAttribute('aria-label', slot.title)
       const picture = document.createElement('canvas')
@@ -226,7 +264,10 @@ export function createApplication() {
     const touchDevice = matchMedia('(pointer: coarse)').matches
     text(lessonProgress, '新手训练 ' + copy.number + ' / 5')
     text(lessonTitle, copy.title)
-    text(lessonDetail, touchDevice ? copy.touch : copy.desktop)
+    const reviewed = lesson.step === 'wave' && run?.inspections.length
+    text(lessonDetail, reviewed
+      ? '复检已隔离待检件。沿绿色箭头走进基础冲击波的安全缺口。'
+      : touchDevice ? copy.touch : copy.desktop)
     const done = lesson.step === 'done'
     finishTraining.hidden = !done
     if (done) {
@@ -263,7 +304,7 @@ export function createApplication() {
     upgradeScreen.hidden = true
     pauseScreen.hidden = true
     endScreen.hidden = true
-    stage.classList.remove('boss-active')
+    stage.classList.remove('boss-active', 'incident-active')
     workstation.dataset.mode = 'title'
     sound.setMode('menu')
     startButton.focus({ preventScroll: true })
@@ -352,6 +393,31 @@ export function createApplication() {
         rank.textContent = '第 ' + (run.ranks[id] + 1) + ' 级'
       }
       button.append(image, key, name, rank, details)
+
+      if (equipment) {
+        const from = previewToolStats(run, id, run.ranks[id])
+        const to = previewToolStats(run, id, run.ranks[id] + 1)
+        const stats = document.createElement('span')
+        stats.className = 'item-stats'
+        for (const [label, value] of [
+          ['伤害', from.damage + ' → ' + to.damage],
+          ['间隔', from.interval.toFixed(2) + ' → ' + to.interval.toFixed(2) + ' 秒'],
+          ['量程', from.reach.toFixed(1) + ' → ' + to.reach.toFixed(1) + ' 米'],
+        ]) {
+          const field = document.createElement('span')
+          const caption = document.createElement('span')
+          const reading = document.createElement('b')
+          caption.textContent = label
+          reading.textContent = value
+          field.append(caption, reading)
+          stats.append(field)
+        }
+        if (run.ranks[id] === 2) {
+          details.textContent = CALIBRATIONS[id]
+          button.classList.add('calibration-choice')
+        }
+        button.insertBefore(stats, details)
+      }
       button.addEventListener('click', () => select(index))
       upgradeOptions.append(button)
     }
@@ -359,8 +425,13 @@ export function createApplication() {
   }
 
   function select(index: number) {
-    if (!run || paused || !chooseUpgrade(run, index)) return
+    if (!run || paused) return
+    const selected = run.choices[index]
+    if (!selected || !chooseUpgrade(run, index)) return
     sound.play('click')
+    if (!lesson && (selected === 'caliper' || isWeapon(selected)) && run.ranks[selected] === 3) {
+      note(UPGRADES[selected].name + ' · Lv.3 校准', CALIBRATIONS[selected], 162)
+    }
     clearControls()
     upgradeScreen.hidden = true
     touch.hidden = false
@@ -410,22 +481,33 @@ export function createApplication() {
     text(endKills, String(run.kills))
     text(endRisk, hazardValue(run) + ' / 3')
     endLog.replaceChildren()
-    if (run.accepted.length === 0) {
+
+    const rows = [
+      ...run.accepted.map(record => ({
+        tick: record.tick, action: SHORTCUTS[record.kind].name,
+        reason: SHORTCUTS[record.kind].trace + ' · ' + SHORTCUTS[record.kind].consequence, safe: false,
+      })),
+      ...run.inspections.map(record => ({
+        tick: record.tick, action: '合规复检',
+        reason: INCIDENTS[record.slot].batch + ' · 隔离 ' + record.isolated + ' 件', safe: true,
+      })),
+    ].sort((a, b) => a.tick - b.tick)
+    if (rows.length === 0) {
       const item = document.createElement('li')
-      item.textContent = '本局隐患值保持为 0。'
+      item.textContent = '本班质量隐患值为 0。'
       endLog.append(item)
-    } else {
-      for (const record of run.accepted) {
-        const item = document.createElement('li')
-        const time = document.createElement('time')
-        time.textContent = clockText(record.tick)
-        const name = document.createElement('b')
-        name.textContent = SHORTCUTS[record.kind].name
-        const reason = document.createElement('span')
-        reason.textContent = SHORTCUTS[record.kind].trace + ' · ' + SHORTCUTS[record.kind].consequence
-        item.append(time, name, reason)
-        endLog.append(item)
-      }
+    }
+    for (const row of rows) {
+      const item = document.createElement('li')
+      item.dataset.safe = String(row.safe)
+      const time = document.createElement('time')
+      time.textContent = clockText(row.tick)
+      const name = document.createElement('b')
+      name.textContent = row.action
+      const reason = document.createElement('span')
+      reason.textContent = row.reason
+      item.append(time, name, reason)
+      endLog.append(item)
     }
     sound.setMode('quiet')
     sound.play(run.outcome === 'stopped' ? 'fail' : 'success')
@@ -434,6 +516,7 @@ export function createApplication() {
 
   function advance(input: Input) {
     if (!run || paused || run.phase === 'ended' || run.choices.length || lesson?.step === 'done') return
+    const killsBefore = run.kills
     const signal = advanceRun(run, input)
     if (signal & Signal.strike) sound.play('strike')
     if (signal & Signal.dash) sound.play('dash')
@@ -448,10 +531,19 @@ export function createApplication() {
       if (!lesson) note(UPGRADES[run.lastToolPicked].name + ' · Lv.1', '已解锁。收集实测量块，可以继续升级。', 128)
       sound.play('level')
     }
-    if (signal & Signal.offer) note('捷径出现', '靠近闪光道具可查看收益和隐患。', 138, true)
+
+    if (signal & Signal.incidentWarning) sound.play('wave')
+    if (signal & Signal.offer) sound.play('hit')
+    if (signal & Signal.inspection) {
+      const record = run.inspections[run.inspections.length - 1]
+      note('复检完成', '隔离 ' + record.isolated + ' 件' + (record.recovery > 0 ? ' · 生命 +' + record.recovery : ' · 合规留档'), 150)
+      sound.play('level')
+    }
+    if (signal & Signal.incidentClosed && !lesson) note('处置窗口已结束', '继续走位处理场上零件。', 122)
     if (signal & Signal.shortcut) {
       const definition = SHORTCUTS[run.accepted[run.accepted.length - 1].kind]
-      note(definition.name + '已使用', definition.benefit + ' · 隐患 +1', 175, true)
+      const reward = signal & Signal.clear ? '清场 ' + (run.kills - killsBefore) + ' 件' : definition.benefit
+      note(definition.name + '已使用', reward + ' · 隐患 +1', 175, true)
       sound.play(signal & Signal.clear ? 'clear' : 'accept')
     }
     if (signal & Signal.boss) {
