@@ -158,8 +158,7 @@ kbd {
 .game-view canvas { width: 100%; height: 100%; image-rendering: pixelated; }
 .stage-lines {
   z-index: 1; pointer-events: none;
-  box-shadow: inset 0 0 58px 8px #050c0e8a;
-  background-image: repeating-linear-gradient(to bottom, #0c170c00 0 3px, #08151414 3px 4px);
+  box-shadow: inset 0 0 43px 4px #04101678;
 }
 .stage-corner {
   z-index: 5; position: absolute; width: 16px; height: 16px; pointer-events: none;

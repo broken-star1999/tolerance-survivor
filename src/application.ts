@@ -246,8 +246,8 @@ export function createApplication() {
       slot.title = definition.name + ' · Lv.' + run.ranks[tool]
       slot.setAttribute('aria-label', slot.title)
       const picture = document.createElement('canvas')
-      picture.width = 25
-      picture.height = 25
+      picture.width = 36
+      picture.height = 36
       picture.setAttribute('aria-hidden', 'true')
       view.icon(picture, definition.sprite)
       const rank = document.createElement('b')
@@ -374,8 +374,8 @@ export function createApplication() {
       button.type = 'button'
       button.className = 'upgrade-choice'
       const image = document.createElement('canvas')
-      image.width = 32
-      image.height = 32
+      image.width = 40
+      image.height = 40
       image.setAttribute('aria-hidden', 'true')
       view.icon(image, definition.sprite as SpriteName)
       const key = document.createElement('kbd')

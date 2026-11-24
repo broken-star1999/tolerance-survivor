@@ -1,5 +1,5 @@
 import {
-  AmbientLight, BoxGeometry, CanvasTexture, CircleGeometry, Color, DirectionalLight, DoubleSide,
+  BoxGeometry, CanvasTexture, CircleGeometry, Color, DoubleSide,
   DynamicDrawUsage, InstancedBufferAttribute, InstancedBufferGeometry, InstancedMesh, LinearSRGBColorSpace,
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
@@ -16,6 +16,12 @@ const LILAC = new Color('#f593db')
 const RUST = new Color('#ff8a63')
 const ICE = new Color('#67bed3')
 const DARK = new Color('#071619')
+const WALK_CYCLE = [0, 1, 0, 2] as const
+const ENGINEER_FRAMES = {
+  side: ['engineer', 'engineer-stride-a', 'engineer-stride-b'],
+  front: ['engineer-front', 'engineer-front-a', 'engineer-front-b'],
+  back: ['engineer-back', 'engineer-back-a', 'engineer-back-b'],
+} as const satisfies Record<string, readonly SpriteName[]>
 
 const EMPTY_FLAGS = { depthWrite: false, transparent: true }
 type Atlas = ReturnType<typeof createSpriteAtlas>
@@ -44,7 +50,9 @@ const spriteFragment = /* glsl */ [
   'void main() {',
   '  vec4 paint = texture2D(textureAtlas, atlasUv);',
   '  if(paint.a < .55) discard;',
-  '  gl_FragColor = vec4(mix(paint.rgb, vec3(1.0, .78, .48), flash), 1.);',
+  '  float highlight = max(paint.r, max(paint.g, paint.b));',
+  '  vec3 hit = mix(paint.rgb * vec3(1.12, 1., .87), vec3(1., .73, .46), .12 + .24 * highlight);',
+  '  gl_FragColor = vec4(mix(paint.rgb, hit, flash), 1.);',
   '  #include <colorspace_fragment>',
   '}',
 ].join('\n')
@@ -109,8 +117,8 @@ const pixelPostFragment = /* glsl */ [
   'void main() {',
   '  vec3 p = texture2D(picture, screenUv).rgb;',
   '  float vignette = length((screenUv - vec2(.53,.54))*vec2(1.02,.86));',
-  '  p *= 1.02 - .19*smoothstep(.26,.68,vignette);',
-  '  p += vec3(.005,.009,.008);',
+  '  p *= 1.04 - .16*smoothstep(.27,.70,vignette);',
+  '  p += vec3(.003,.004,.006);',
   '  gl_FragColor = vec4(p,1.);',
   '  #include <colorspace_fragment>',
   '}',
@@ -215,12 +223,8 @@ export function createGameView(host: HTMLElement) {
   host.append(renderer.domElement)
 
   const world = new Scene()
-  world.background = new Color('#122226')
+  world.background = new Color('#13202a')
   world.add(createWorkshop())
-  world.add(new AmbientLight('#d0f5e9', 1.15))
-  const light = new DirectionalLight('#ffe5ba', 1.35)
-  light.position.set(-5, 14, 7)
-  world.add(light)
   const camera = new OrthographicCamera(-18, 18, 10, -10, .1, 100)
 
   const atlas = createSpriteAtlas()
@@ -240,7 +244,7 @@ export function createGameView(host: HTMLElement) {
   const wavers = Array.from({ length: 12 }, () => makeWaveMesh(waveGeometry))
   world.add(...wavers)
 
-  const target = new WebGLRenderTarget(640, 360, {
+  const target = new WebGLRenderTarget(1, 1, {
     minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true, stencilBuffer: false,
     colorSpace: LinearSRGBColorSpace,
   })
@@ -274,8 +278,9 @@ export function createGameView(host: HTMLElement) {
     camera.top = viewHeight / 2
     camera.bottom = -viewHeight / 2
     camera.updateProjectionMatrix()
-    const width = Math.max(176, Math.min(720, Math.round(bounds.width / 2.18)))
-    const height = Math.round(width / aspect)
+    const scale = Math.min(1 / 1.57, 960 / bounds.width, 680 / bounds.height)
+    const width = Math.max(1, Math.round(bounds.width * scale))
+    const height = Math.max(1, Math.round(bounds.height * scale))
     renderer.setSize(width, height, false)
     target.setSize(width, height)
   }
@@ -448,7 +453,8 @@ export function createGameView(host: HTMLElement) {
       marker(tool.x, tool.z, .88 + float * .11, MINT)
       marker(tool.x, tool.z, .34, ICE)
       shadow(tool.x, tool.z, .39, .24)
-      sprites.add(tool.kind, tool.x, tool.z, 1.00, .99, .2 + .16 * float, 1, .12)
+      sprites.add(tool.kind, tool.x, tool.z, 1.09, 1.04, .19 + .15 * float)
+      if (float > .66) sprites.add('spark', tool.x + .35, tool.z + .09, .21, .19, .99 + .13 * float)
     }
     for (const shortcut of run.shortcuts) {
       if (!shortcut.active) continue
@@ -463,8 +469,8 @@ export function createGameView(host: HTMLElement) {
       if (!enemy.active) continue
       const bob = .03 + .074 * Math.sin(time * (enemy.kind === 'blank' ? 13 : 9) + enemy.x * 2 + enemy.z)
       const flash = enemy.flashUntil > run.tick ? .74 : 0
-      const width = enemy.kind === 'bolt' ? 1.04 : enemy.kind === 'phantom' ? .91 : .86
-      const height = enemy.kind === 'bolt' ? 1.32 : enemy.kind === 'phantom' ? 1.15 : .78
+      const width = enemy.kind === 'bolt' ? 1.08 : enemy.kind === 'phantom' ? 1.02 : .99
+      const height = enemy.kind === 'bolt' ? 1.44 : enemy.kind === 'phantom' ? 1.24 : .79
       shadow(enemy.x, enemy.z, width * .48, width * .31)
       sprites.add(enemy.kind, enemy.x, enemy.z, width, height, Math.max(.025, bob), enemy.facing, flash)
       if (enemy.mode === 1) {
@@ -484,16 +490,25 @@ export function createGameView(host: HTMLElement) {
     }
 
     const { player } = run
-    const moving = player.moving && run.tick % 24 >= 12
+    const dashing = run.tick < player.dashUntil
+    const dx = dashing ? player.dashX : player.dx
+    const dz = dashing ? player.dashZ : player.dz
+    const pose = Math.abs(dx) > Math.abs(dz) * .93 ? 'side' : dz > 0 ? 'front' : 'back'
+    const facing = pose === 'side' && dx < 0 ? -1 : 1
+    const step = player.moving ? WALK_CYCLE[Math.floor(run.tick / 5) % WALK_CYCLE.length] : 0
     const flash = run.tick - player.hurtAt < 17 && Math.floor(run.tick / 3) % 2 === 0 ? .89 : 0
     shadow(player.x, player.z, .55, .33)
     marker(player.x, player.z, .43, run.tick < run.boostUntil ? GOLD : MINT)
-    sprites.add(moving ? 'engineer-step' : 'engineer', player.x, player.z, 1.08, 1.43, .06, player.facing, flash)
+    sprites.add(ENGINEER_FRAMES[pose][step], player.x, player.z, 1.23, 1.53, .05, facing, flash)
+    if (run.ranks.caliper && pose !== 'back') {
+      sprites.add('held-caliper', player.x + .45 * facing, player.z + .14, .45, .40, .77, facing, flash)
+    }
     if (run.boss.active) {
       const { boss } = run
+      const charging = run.waves.some(wave => wave.active && run.tick >= wave.warnAt && run.tick < wave.pulseAt)
       shadow(boss.x, boss.z, 1.88, 1.22)
       marker(boss.x, boss.z, 1.93, RUST)
-      sprites.add('boss', boss.x, boss.z, 3.52, 3.54, .11 + Math.sin(time * 8) * .087, 1, boss.flashUntil > run.tick ? .63 : 0)
+      sprites.add(charging ? 'boss-charged' : 'boss', boss.x, boss.z, 3.70, 3.66, .11 + Math.sin(time * 8) * .087, 1, boss.flashUntil > run.tick ? .63 : 0)
       for (let i = 0; i < run.waves.length; i++) drawWave(run.waves[i], run, i)
     }
 
@@ -515,7 +530,16 @@ export function createGameView(host: HTMLElement) {
           sprites.add('spark', effect.x + Math.cos(angle) * distance, effect.z + Math.sin(angle) * distance, .24 * (1.25 - progress), .22 * (1.25 - progress), .3 + progress * .43)
         }
       } else if (effect.kind === 'dash') {
-        line(effect.x, effect.z, effect.toX, effect.toZ, .22 * (1 - progress) + .02, ICE, .05)
+        const dx = effect.toX - effect.x
+        const dz = effect.toZ - effect.z
+        const width = .20 * (1 - progress) + .025
+        line(effect.x, effect.z, effect.toX, effect.toZ, width, ICE, .05)
+        for (let i = 0; i < 3; i++) {
+          const at = .27 + i * .26 - progress * .21
+          const side = (i % 2 ? .14 : -.14) * (1 + progress)
+          const size = .16 * (1 - progress)
+          sprites.add('spark', effect.x + dx * at - dz * side, effect.z + dz * at + dx * side, size, size, .13 + .18 * progress)
+        }
       } else if (effect.kind === 'clear') {
         marker(effect.x, effect.z, .9 + progress * 13, GOLD, .055)
         marker(effect.x, effect.z, .4 + progress * 9.8, MINT, .056)
@@ -544,27 +568,29 @@ export function createGameView(host: HTMLElement) {
   function drawTitle(time: number) {
     const portrait = aspect < 1
     const x = portrait ? 2.1 : 6.0
-    const z = portrait ? -2.0 : .35
-    shadow(x, z, 1.1, .62)
-    marker(x, z, 1.13 + Math.sin(time * 2) * .08, MINT)
-    sprites.add('engineer', x, z, 2.1, 2.8, .1 + Math.sin(time * 2) * .07)
+    const z = portrait ? -2.7 : .28
+    const bob = .06 * Math.sin(time * 2)
+    shadow(x, z, 1.23, .72)
+    marker(x, z, 1.29 + bob, MINT)
+    sprites.add('engineer-front', x, z, 2.81, 3.54, .12 + bob)
+    sprites.add('held-caliper', x + 1.01, z + .30, .98, .86, 1.84 + bob)
     marker(x + 3.4, z - 3.2, .74, GOLD)
     sprites.add('pass', x + 3.4, z - 3.2, .87, .9, .26 + Math.sin(time * 2.7) * .13)
     const layout: { name: SpriteName; x: number; z: number; w: number; h: number }[] = [
-      { name: 'blank', x: -3.9, z: -.8, w: 1.43, h: 1.18 },
-      { name: 'blank', x: 4.8, z: 2.7, w: 1.16, h: 1.02 },
-      { name: 'bolt', x: 1.8, z: 3.7, w: 1.45, h: 1.78 },
-      { name: 'phantom', x: -.8, z: -4.2, w: 1.35, h: 1.63 },
+      { name: 'blank', x: -3.9, z: -.8, w: 1.61, h: 1.21 },
+      { name: 'blank', x: 4.8, z: 2.7, w: 1.39, h: 1.05 },
+      { name: 'bolt', x: 1.8, z: 3.7, w: 1.50, h: 1.91 },
+      { name: 'phantom', x: -.8, z: -4.2, w: 1.48, h: 1.75 },
     ]
     for (const prop of layout) {
       shadow(x + prop.x, z + prop.z, prop.w * .45, prop.w * .25)
       sprites.add(prop.name, x + prop.x, z + prop.z, prop.w, prop.h, .1 + .055 * Math.sin(time * 2 + prop.x), prop.x > 0 ? -1 : 1)
     }
-    const aimX = x - 3.9
-    const aimZ = z - .8
+    const aimX = x + 4.8
+    const aimZ = z + 2.7
     const blink = Math.pow(.5 + Math.sin(time * 4.1) * .5, 8)
     if (blink > .19) {
-      line(x, z, aimX, aimZ, .09 + blink * .08, MINT, .105)
+      line(x + .64, z + .29, aimX, aimZ, .09 + blink * .08, MINT, .105)
       sprites.add('spark', aimX, aimZ, .51, .57, .45, 1, .6)
     }
     for (let i = 0; i < 5; i++) {
@@ -604,7 +630,7 @@ export function createGameView(host: HTMLElement) {
     } else {
       const portrait = aspect < 1
       cameraX = portrait ? 1.5 : -2.3
-      cameraZ = portrait ? .9 : -1.58
+      cameraZ = portrait ? -.25 : -2.61
       drawTitle(milliseconds / 1000)
     }
 
