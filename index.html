@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1719">
+  <meta name="description" content="用游标卡尺在失控的试制车间撑过一班。每一次捷径，都会在事故战留下可追溯的后果。">
+  <title>公差幸存者</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="workstation" id="workstation">
+    <header class="station-bar">
+      <div class="station-name">
+        <span class="station-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>岑岭试制车间 <small>计量站</small></span>
+      </div>
+      <div class="station-actions">
+        <button class="switch" id="sound-button" type="button" aria-pressed="true"><span class="switch-dot"></span><span id="sound-label">声音开</span></button>
+        <button class="switch" id="full-button" type="button"><span class="full-icon" aria-hidden="true"></span><span id="full-label">全屏</span></button>
+        <button class="switch" id="pause-button" type="button" hidden><span class="pause-icon" aria-hidden="true"></span><span>暂停</span></button>
+        <button class="switch" id="skip-training" type="button" hidden>跳过训练</button>
+      </div>
+    </header>
+
+    <section class="stage" id="stage" aria-label="质检车间游戏区域">
+      <div id="game-view" class="game-view" aria-hidden="true"></div>
+      <div class="stage-lines" aria-hidden="true"></div>
+      <div class="stage-corner corner-tl" aria-hidden="true"></div><div class="stage-corner corner-tr" aria-hidden="true"></div>
+      <div class="stage-corner corner-bl" aria-hidden="true"></div><div class="stage-corner corner-br" aria-hidden="true"></div>
+
+      <section class="title-screen" id="title-screen" aria-labelledby="game-title">
+        <div class="title-content">
+          <div class="title-line" aria-hidden="true"><b></b><i></i><i></i><i></i></div>
+          <h1 id="game-title">公差<span>幸存者</span></h1>
+          <p>用游标卡尺撑过车间敌潮。捷径能救眼前，留下的隐患会改变最后的事故战。</p>
+          <div class="title-actions">
+            <button class="action primary" type="button" id="start-button"><span class="play-icon">▶</span>开始值班<span class="enter-hint">↵</span></button>
+            <button class="action secondary" type="button" id="learn-button">操作训练</button>
+          </div>
+          <p class="boot-message" id="boot-message" role="status" hidden></p>
+          <div class="control-legend" aria-label="操作说明">
+            <span><kbd>WASD</kbd> 移动</span>
+            <span><kbd>空格</kbd> 冲刺</span>
+            <span><kbd>E</kbd> 拾取捷径</span>
+          </div>
+        </div>
+        <div class="title-shift"><span>事故处置</span><strong>03:30</strong></div>
+      </section>
+
+      <div class="hud" id="hud" hidden>
+        <div class="hud-top">
+          <div class="health-panel">
+            <div class="meter-label"><span>生命</span><strong id="health-value">100 / 100</strong></div>
+            <div class="meter health-meter" id="health-meter" role="progressbar" aria-label="生命" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><div id="health-fill"></div></div>
+            <div class="meter xp-meter" aria-hidden="true"><div id="xp-fill"></div></div>
+          </div>
+          <div class="time-panel">
+            <span id="phase-text">守住产线</span>
+            <strong id="clock-text">00:00</strong>
+          </div>
+          <div class="count-panel"><span id="level-text">等级 01</span><strong id="kills-text">击退 0</strong></div>
+        </div>
+        <section class="training-panel" id="training-panel" aria-live="polite" hidden>
+          <span id="training-progress">新手训练 1 / 5</span>
+          <strong id="training-title">走到量具标记</strong>
+          <p id="training-detail"></p>
+          <button class="action primary" id="finish-training" type="button" hidden>开始正式值班</button>
+        </section>
+        <div class="boss-meter" id="boss-meter" hidden>
+          <div class="meter-label"><span>失稳试验台</span><strong id="wave-info">1 道波 · 缺口 100°</strong></div>
+          <div class="meter"><div id="boss-fill"></div></div>
+        </div>
+        <div class="toast" role="status" id="toast" hidden><strong id="toast-title"></strong><span id="toast-detail"></span></div>
+        <div class="tool-card" id="tool-card" hidden><strong id="tool-name"></strong><span>靠近拾取 · 解锁 Lv.1</span></div>
+        <div class="shortcut-card" id="shortcut-card" hidden>
+          <div class="shortcut-card-top"><strong id="shortcut-name"></strong><span>隐患 +1</span></div>
+          <span id="shortcut-benefit"></span>
+          <span id="shortcut-consequence"></span>
+          <div class="shortcut-instruction"><kbd>E</kbd> <span id="shortcut-action">确认拾取</span></div>
+        </div>
+        <div class="hud-bottom">
+          <div class="equipment">
+            <div id="weapon-icons" class="weapon-icons"></div>
+            <div class="gear-details"><strong id="gear-count">工具 1 / 3</strong><span id="weapon-status">自动测量</span></div>
+          </div>
+          <div class="risk-panel" id="risk-panel">
+            <div><span>质量隐患</span><strong id="risk-value">0 / 3</strong></div>
+            <div class="risk-segments" id="risk-segments" aria-hidden="true"><i></i><i></i><i></i></div>
+          </div>
+          <div class="dash-panel"><div><kbd>空格</kbd><span id="dash-text">冲刺就绪</span></div><div class="meter"><div id="dash-fill"></div></div></div>
+        </div>
+      </div>
+
+      <div class="floating-joystick joystick" id="floating-joystick" hidden aria-hidden="true"><i id="floating-stick"></i></div>
+      <div class="touch-controls" id="touch-controls" hidden>
+        <div class="joystick" id="joystick" aria-label="移动摇杆"><i id="joystick-stick"></i></div>
+        <div class="touch-actions"><button type="button" id="touch-accept" disabled>拾取</button><button type="button" id="touch-dash">冲刺</button></div>
+      </div>
+
+      <section class="overlay" id="upgrade-screen" aria-labelledby="upgrade-title" hidden>
+        <div class="dialog upgrade-dialog" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
+          <div class="dialog-eyebrow" id="upgrade-level">等级 02</div>
+          <h2 id="upgrade-title">校准量具</h2>
+          <p class="dialog-text">选一项升级，恢复值班。</p>
+          <div class="upgrade-options" id="upgrade-options"></div>
+        </div>
+      </section>
+
+      <section class="overlay" id="pause-screen" aria-labelledby="pause-title" hidden>
+        <div class="dialog small-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+          <h2 id="pause-title">值班暂停</h2>
+          <div class="dialog-buttons">
+            <button class="action primary" id="resume-button" type="button">继续值班</button>
+            <button class="action secondary" id="pause-home" type="button">返回标题</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="overlay" id="end-screen" aria-labelledby="end-title" hidden>
+        <div class="dialog end-dialog" role="dialog" aria-modal="true" aria-labelledby="end-title">
+          <div class="dialog-eyebrow" id="end-label">本班质检报告</div>
+          <h2 id="end-title">验收通过</h2>
+          <p class="dialog-text" id="end-reason"></p>
+          <dl class="result-stats">
+            <div><dt>坚持时间</dt><dd id="end-time"></dd></div>
+            <div><dt>击退零件</dt><dd id="end-kills"></dd></div>
+            <div><dt>质量隐患</dt><dd id="end-risk"></dd></div>
+          </dl>
+          <div class="report-history">
+            <h3>隐患追溯</h3>
+            <ul id="end-log"></ul>
+          </div>
+          <div class="dialog-buttons">
+            <button class="action primary" id="retry-button" type="button">再值一班</button>
+            <button class="action secondary" id="end-home" type="button">返回标题</button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <footer class="station-foot" aria-label="游戏目标">
+      <span><strong>任务</strong> 守住车间，击败失稳试验台</span>
+      <span class="keyboard-tip"><kbd>ESC</kbd> 暂停</span>
+    </footer>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

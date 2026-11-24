@@ -1,0 +1,576 @@
+import {
+  AmbientLight, BoxGeometry, CanvasTexture, CircleGeometry, Color, DirectionalLight, DoubleSide,
+  DynamicDrawUsage, InstancedBufferAttribute, InstancedBufferGeometry, InstancedMesh, LinearSRGBColorSpace,
+  Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
+  RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
+} from 'three'
+import { ARENA, HZ, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { createSpriteAtlas, type SpriteName } from './sprites.ts'
+import { createWorkshop } from './workshop.ts'
+
+const MAX_SPRITES = 880
+const TAU = Math.PI * 2
+const MINT = new Color('#96f4cc')
+const GOLD = new Color('#ffbb63')
+const LILAC = new Color('#f593db')
+const RUST = new Color('#ff8a63')
+const ICE = new Color('#67bed3')
+const DARK = new Color('#071619')
+
+const EMPTY_FLAGS = { depthWrite: false, transparent: true }
+type Atlas = ReturnType<typeof createSpriteAtlas>
+
+const spriteVertex = /* glsl */ [
+  'attribute vec3 location;',
+  'attribute vec2 dimensions;',
+  'attribute vec4 frame;',
+  'attribute vec2 style;',
+  'varying vec2 atlasUv;',
+  'varying float flash;',
+  'void main() {',
+  '  vec2 coords = vec2(style.x < 0.0 ? 1.0 - uv.x : uv.x, uv.y);',
+  '  atlasUv = frame.xy + coords * frame.zw;',
+  '  flash = style.y;',
+  '  vec4 point = modelViewMatrix * vec4(location, 1.0);',
+  '  point.xy += vec2(position.x, position.y + .5) * dimensions;',
+  '  gl_Position = projectionMatrix * point;',
+  '}',
+].join('\n')
+
+const spriteFragment = /* glsl */ [
+  'uniform sampler2D textureAtlas;',
+  'varying vec2 atlasUv;',
+  'varying float flash;',
+  'void main() {',
+  '  vec4 paint = texture2D(textureAtlas, atlasUv);',
+  '  if(paint.a < .55) discard;',
+  '  gl_FragColor = vec4(mix(paint.rgb, vec3(1.0, .78, .48), flash), 1.);',
+  '  #include <colorspace_fragment>',
+  '}',
+].join('\n')
+
+const waveVertex = /* glsl */ [
+  'varying vec2 ground;',
+  'void main() {',
+  '  ground = vec2(position.x, -position.y);',
+  '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);',
+  '}',
+].join('\n')
+
+const waveFragment = /* glsl */ [
+  'varying vec2 ground;',
+  'uniform float angle;',
+  'uniform float halfGap;',
+  'uniform float radius;',
+  'uniform float phase;',
+  'uniform float lifetime;',
+  'void main() {',
+  '  float r = length(ground);',
+  '  float a = atan(ground.y, ground.x);',
+  '  float d = abs(atan(sin(a-angle),cos(a-angle)));',
+  '  bool safe = d < halfGap;',
+  '  vec3 red = vec3(.95,.18,.058);',
+  '  vec3 green = vec3(.16,.78,.52);',
+  '  float alpha = 0.0;',
+  '  vec3 color = safe ? green : red;',
+  '  if (phase < .5) {',
+  '    if (r < .8 || r > 13.0) discard;',
+  '    float stripes = step(.63,fract((ground.x + ground.y)*1.65));',
+  '    float ruler = step(.91,fract(r/2.6));',
+  '    float boundary = 1.0 - smoothstep(.012,.033,abs(d-halfGap));',
+  '    alpha = (safe ? .065 : .101 + stripes*.065) + ruler*.15 + boundary*.46;',
+  '    alpha *= (.62 + .38*lifetime) * (1.0-smoothstep(11.7,13.0,r));',
+  '    if (boundary > .53) color = green;',
+  '  } else {',
+  '    if (safe) discard;',
+  '    float edge = r-radius;',
+  '    float crest = 1.0-smoothstep(.10,.52,abs(edge));',
+  '    float tail = smoothstep(-1.08,-.22,edge)*(1.0-step(-.16,edge));',
+  '    alpha = max(crest*.89,tail*.39);',
+  '    color = mix(red, vec3(1.0,.79,.48), 1.0-smoothstep(.018,.23,abs(edge)));',
+  '  }',
+  '  if(alpha<.01) discard;',
+  '  gl_FragColor = vec4(color,alpha);',
+  '  #include <colorspace_fragment>',
+  '}',
+].join('\n')
+
+const pixelPostVertex = /* glsl */ [
+  'varying vec2 screenUv;',
+  'void main() {',
+  '  screenUv = uv;',
+  '  gl_Position = vec4(position.xy,0.,1.);',
+  '}',
+].join('\n')
+
+const pixelPostFragment = /* glsl */ [
+  'uniform sampler2D picture;',
+  'varying vec2 screenUv;',
+  'void main() {',
+  '  vec3 p = texture2D(picture, screenUv).rgb;',
+  '  float vignette = length((screenUv - vec2(.53,.54))*vec2(1.02,.86));',
+  '  p *= 1.02 - .19*smoothstep(.26,.68,vignette);',
+  '  p += vec3(.005,.009,.008);',
+  '  gl_FragColor = vec4(p,1.);',
+  '  #include <colorspace_fragment>',
+  '}',
+].join('\n')
+
+class SpriteBatch {
+  readonly mesh: Mesh
+  private readonly geometry: InstancedBufferGeometry
+  private readonly locations = new Float32Array(MAX_SPRITES * 3)
+  private readonly dimensions = new Float32Array(MAX_SPRITES * 2)
+  private readonly frames = new Float32Array(MAX_SPRITES * 4)
+  private readonly styles = new Float32Array(MAX_SPRITES * 2)
+  private count = 0
+  private readonly atlas: Atlas
+
+  constructor(atlas: Atlas) {
+    this.atlas = atlas
+    const texture = new CanvasTexture(atlas.canvas)
+    texture.colorSpace = SRGBColorSpace
+    texture.minFilter = NearestFilter
+    texture.magFilter = NearestFilter
+    texture.generateMipmaps = false
+    const plane = new PlaneGeometry(1, 1)
+    this.geometry = new InstancedBufferGeometry()
+    this.geometry.index = plane.index
+    this.geometry.setAttribute('position', plane.attributes.position)
+    this.geometry.setAttribute('uv', plane.attributes.uv)
+    this.geometry.setAttribute('location', new InstancedBufferAttribute(this.locations, 3).setUsage(DynamicDrawUsage))
+    this.geometry.setAttribute('dimensions', new InstancedBufferAttribute(this.dimensions, 2).setUsage(DynamicDrawUsage))
+    this.geometry.setAttribute('frame', new InstancedBufferAttribute(this.frames, 4).setUsage(DynamicDrawUsage))
+    this.geometry.setAttribute('style', new InstancedBufferAttribute(this.styles, 2).setUsage(DynamicDrawUsage))
+    this.geometry.instanceCount = 0
+    const material = new ShaderMaterial({
+      uniforms: { textureAtlas: { value: texture } },
+      vertexShader: spriteVertex,
+      fragmentShader: spriteFragment,
+    })
+    this.mesh = new Mesh(this.geometry, material)
+    this.mesh.frustumCulled = false
+  }
+
+  clear() { this.count = 0 }
+
+  add(name: SpriteName, x: number, z: number, width: number, height: number, y = .05, facing = 1, flash = 0) {
+    if (this.count >= MAX_SPRITES) return
+    const index = this.count++
+    const frame = this.atlas.frames[name]
+    const sheet = this.atlas.canvas
+    this.locations[index * 3] = x
+    this.locations[index * 3 + 1] = y
+    this.locations[index * 3 + 2] = z
+    this.dimensions[index * 2] = width
+    this.dimensions[index * 2 + 1] = height
+    this.frames[index * 4] = frame.x / sheet.width
+    this.frames[index * 4 + 1] = 1 - (frame.y + frame.height) / sheet.height
+    this.frames[index * 4 + 2] = frame.width / sheet.width
+    this.frames[index * 4 + 3] = frame.height / sheet.height
+    this.styles[index * 2] = facing
+    this.styles[index * 2 + 1] = flash
+  }
+
+  flush() {
+    this.geometry.instanceCount = this.count
+    for (const field of ['location', 'dimensions', 'frame', 'style']) {
+      this.geometry.attributes[field].needsUpdate = true
+    }
+  }
+}
+
+function makeFloorBatch(geometry: BoxGeometry | CircleGeometry | RingGeometry, maximum: number, opacity: number) {
+  const material = new MeshBasicMaterial({ color: 0xffffff, opacity, ...EMPTY_FLAGS, side: DoubleSide })
+  const mesh = new InstancedMesh(geometry, material, maximum)
+  mesh.instanceMatrix.setUsage(DynamicDrawUsage)
+  mesh.frustumCulled = false
+  mesh.count = 0
+  return mesh
+}
+
+function makeWaveMesh(geometry: PlaneGeometry) {
+  const material = new ShaderMaterial({
+    vertexShader: waveVertex,
+    fragmentShader: waveFragment,
+    side: DoubleSide,
+    ...EMPTY_FLAGS,
+    uniforms: {
+      angle: { value: 0 }, halfGap: { value: 0 }, radius: { value: 0 },
+      phase: { value: 0 }, lifetime: { value: 0 },
+    },
+  })
+  const mesh = new Mesh(geometry, material)
+  mesh.rotation.x = -Math.PI / 2
+  mesh.visible = false
+  mesh.renderOrder = 7
+  return mesh
+}
+
+export function createGameView(host: HTMLElement) {
+  const renderer = new WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance' })
+  renderer.outputColorSpace = SRGBColorSpace
+  renderer.setPixelRatio(1)
+  renderer.domElement.setAttribute('aria-hidden', 'true')
+  host.append(renderer.domElement)
+
+  const world = new Scene()
+  world.background = new Color('#122226')
+  world.add(createWorkshop())
+  world.add(new AmbientLight('#d0f5e9', 1.15))
+  const light = new DirectionalLight('#ffe5ba', 1.35)
+  light.position.set(-5, 14, 7)
+  world.add(light)
+  const camera = new OrthographicCamera(-18, 18, 10, -10, .1, 100)
+
+  const atlas = createSpriteAtlas()
+  const sprites = new SpriteBatch(atlas)
+  world.add(sprites.mesh)
+  const shadows = makeFloorBatch(new CircleGeometry(1, 17), 200, .62)
+  const markings = makeFloorBatch(new RingGeometry(.89, 1, 42), 35, .75)
+  const strips = makeFloorBatch(new BoxGeometry(1, .022, 1), 350, .82)
+  shadows.renderOrder = 1
+  markings.renderOrder = 4
+  strips.renderOrder = 6
+  const floorBatches = [shadows, markings, strips]
+  world.add(...floorBatches)
+  const dummy = new Object3D()
+
+  const waveGeometry = new PlaneGeometry(40, 40)
+  const wavers = Array.from({ length: 12 }, () => makeWaveMesh(waveGeometry))
+  world.add(...wavers)
+
+  const target = new WebGLRenderTarget(640, 360, {
+    minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true, stencilBuffer: false,
+    colorSpace: LinearSRGBColorSpace,
+  })
+  const display = new Scene()
+  const flatCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 2)
+  const film = new ShaderMaterial({
+    vertexShader: pixelPostVertex,
+    fragmentShader: pixelPostFragment,
+    depthTest: false,
+    depthWrite: false,
+    uniforms: { picture: { value: target.texture } },
+  })
+  const screen = new Mesh(new PlaneGeometry(2, 2), film)
+  screen.frustumCulled = false
+  display.add(screen)
+
+  let aspect = 1.72
+  let viewWidth = 36
+  let viewHeight = 20
+  let cameraX = 0
+  let cameraZ = 0
+
+  function resize() {
+    const bounds = host.getBoundingClientRect()
+    if (bounds.width < 2 || bounds.height < 2) return
+    aspect = bounds.width / bounds.height
+    viewHeight = Math.max(17.6, Math.min(25, 32 / aspect))
+    viewWidth = viewHeight * aspect
+    camera.left = -viewWidth / 2
+    camera.right = viewWidth / 2
+    camera.top = viewHeight / 2
+    camera.bottom = -viewHeight / 2
+    camera.updateProjectionMatrix()
+    const width = Math.max(176, Math.min(720, Math.round(bounds.width / 2.18)))
+    const height = Math.round(width / aspect)
+    renderer.setSize(width, height, false)
+    target.setSize(width, height)
+  }
+  const observer = new ResizeObserver(resize)
+  observer.observe(host)
+  resize()
+
+  function shadow(x: number, z: number, rx: number, rz: number) {
+    const i = shadows.count
+    if (i >= shadows.instanceMatrix.count) return
+    dummy.position.set(x + .15, .022, z + .05)
+    dummy.rotation.set(-Math.PI / 2, 0, 0)
+    dummy.scale.set(rx, rz, 1)
+    dummy.updateMatrix()
+    shadows.setMatrixAt(i, dummy.matrix)
+    shadows.setColorAt(i, DARK)
+    shadows.count++
+  }
+
+  function marker(x: number, z: number, radius: number, color: Color, height = .045) {
+    const i = markings.count
+    if (i >= markings.instanceMatrix.count) return
+    dummy.position.set(x, height, z)
+    dummy.rotation.set(-Math.PI / 2, 0, 0)
+    dummy.scale.setScalar(radius)
+    dummy.updateMatrix()
+    markings.setMatrixAt(i, dummy.matrix)
+    markings.setColorAt(i, color)
+    markings.count++
+  }
+
+  function line(x: number, z: number, endX: number, endZ: number, width: number, color: Color, height = .08) {
+    const i = strips.count
+    if (i >= strips.instanceMatrix.count) return
+    const dx = endX - x
+    const dz = endZ - z
+    dummy.position.set((x + endX) / 2, height, (z + endZ) / 2)
+    dummy.rotation.set(0, -Math.atan2(dz, dx), 0)
+    dummy.scale.set(Math.hypot(dx, dz), 1, width)
+    dummy.updateMatrix()
+    strips.setMatrixAt(i, dummy.matrix)
+    strips.setColorAt(i, color)
+    strips.count++
+  }
+
+  function drawDashMark(x: number, z: number, direction: number, scale: number) {
+    const dx = Math.cos(direction) * scale
+    const dz = Math.sin(direction) * scale
+    line(x - dx * .65 - dz * .35, z - dz * .65 + dx * .35, x + dx * .15, z + dz * .15, .07, MINT, .13)
+    line(x - dx * .65 + dz * .35, z - dz * .65 - dx * .35, x + dx * .15, z + dz * .15, .07, MINT, .13)
+  }
+
+  function drawWave(wave: Wave, run: Run, index: number) {
+    const shape = wavers[index]
+    if (!wave.active || run.tick < wave.warnAt) return
+    const forecast = run.tick < wave.pulseAt
+    const uniforms = shape.material.uniforms
+    shape.visible = true
+    shape.position.set(run.boss.x, .067 + index * .001, run.boss.z)
+    uniforms.angle.value = wave.gapCenter
+    uniforms.halfGap.value = wave.gap / 2
+    uniforms.radius.value = wave.radius
+    uniforms.phase.value = forecast ? 0 : 1
+    uniforms.lifetime.value = Math.min(1, (run.tick - wave.warnAt) / 54)
+    if (forecast) {
+      const x = Math.cos(wave.gapCenter)
+      const z = Math.sin(wave.gapCenter)
+      drawDashMark(run.boss.x + x * 3.6, run.boss.z + z * 3.6, wave.gapCenter, .85)
+      drawDashMark(run.boss.x + x * 6.4, run.boss.z + z * 6.4, wave.gapCenter, 1.05)
+    }
+  }
+
+function drawToolEffect(effect: RunEffect, progress: number) {
+    const dx = effect.toX - effect.x
+    const dz = effect.toZ - effect.z
+    const reach = Math.hypot(dx, dz)
+    const heading = Math.atan2(dz, dx)
+    if (effect.kind === 'file') {
+      if (Math.floor(progress * 7) % 2 === 0) {
+        line(effect.x + dx * .29, effect.z + dz * .29, effect.toX, effect.toZ, .095, ICE, .145)
+        sprites.add('spark', effect.toX, effect.toZ, .48, .43, .42, 1, .42)
+      }
+    } else if (effect.kind === 'tape') {
+      const length = Math.max(.20, 1 - Math.abs(progress - .32) / .68)
+      const endX = effect.x + dx * length
+      const endZ = effect.z + dz * length
+      line(effect.x, effect.z, endX, endZ, .17, GOLD, .12)
+      const steps = Math.floor(reach * length / .45)
+      const sideX = -Math.sin(heading) * .15
+      const sideZ = Math.cos(heading) * .15
+      for (let i = 1; i <= steps; i++) {
+        const fraction = i * .45 / Math.max(.01, reach)
+        const x = effect.x + dx * fraction
+        const z = effect.z + dz * fraction
+        line(x, z, x + sideX, z + sideZ, .045, RUST, .135)
+      }
+    } else if (effect.kind === 'mallet') {
+      marker(effect.x, effect.z, .6 + progress * reach, GOLD, .071)
+      marker(effect.x, effect.z, .34 + progress * reach * .75, RUST, .073)
+    } else if (effect.kind === 'wrench') {
+      const radius = .46 + reach * (.34 + .38 * progress)
+      for (let i = 0; i < 7; i++) {
+        const a = heading - .9 + i * .29
+        const b = a + .27
+        line(effect.x + Math.cos(a) * radius, effect.z + Math.sin(a) * radius, effect.x + Math.cos(b) * radius, effect.z + Math.sin(b) * radius, .21 * (1 - progress) + .035, GOLD, .11)
+      }
+    } else if (effect.kind === 'saw') {
+      const sideX = -Math.sin(heading)
+      const sideZ = Math.cos(heading)
+      for (let i = 0; i < 8; i++) {
+        const along = .13 + i * .1
+        const side = (i % 2 ? .46 : -.46) + Math.sin(progress * 10) * .23
+        line(effect.x + dx * along + sideX * side, effect.z + dz * along + sideZ * side, effect.x + dx * (along + .12) - sideX * side, effect.z + dz * (along + .12) - sideZ * side, .073, i % 2 ? ICE : MINT, .13)
+      }
+    }
+  }
+
+  function drawFloor(run: Run) {
+    const time = run.tick / HZ
+    for (const shard of run.shards) {
+      if (!shard.active) continue
+      const pulse = .5 + .5 * Math.sin(time * 6 + shard.phase)
+      const size = shard.value > 1 ? .37 : .28
+      sprites.add('xp', shard.x, shard.z, size * .8, size, .08 + pulse * .12, 1, pulse * .18)
+    }
+    for (const tool of run.tools) {
+      if (!tool.active) continue
+      const float = .5 + .5 * Math.sin(time * 4.2)
+      marker(tool.x, tool.z, .88 + float * .11, MINT)
+      marker(tool.x, tool.z, .34, ICE)
+      shadow(tool.x, tool.z, .39, .24)
+      sprites.add(tool.kind, tool.x, tool.z, 1.00, .99, .2 + .16 * float, 1, .12)
+    }
+    for (const shortcut of run.shortcuts) {
+      if (!shortcut.active) continue
+      const pulse = .5 + .5 * Math.sin(time * 4)
+      const color = shortcut.kind === 'pass' ? GOLD : LILAC
+      marker(shortcut.x, shortcut.z, 1.11 + pulse * .23, color)
+      marker(shortcut.x, shortcut.z, .46, color)
+      shadow(shortcut.x, shortcut.z, .57, .31)
+      sprites.add(shortcut.kind, shortcut.x, shortcut.z, 1.02, 1.05, .25 + pulse * .27)
+    }
+    for (const enemy of run.enemies) {
+      if (!enemy.active) continue
+      const bob = .03 + .074 * Math.sin(time * (enemy.kind === 'blank' ? 13 : 9) + enemy.x * 2 + enemy.z)
+      const flash = enemy.flashUntil > run.tick ? .74 : 0
+      const width = enemy.kind === 'bolt' ? 1.04 : enemy.kind === 'phantom' ? .91 : .86
+      const height = enemy.kind === 'bolt' ? 1.32 : enemy.kind === 'phantom' ? 1.15 : .78
+      shadow(enemy.x, enemy.z, width * .48, width * .31)
+      sprites.add(enemy.kind, enemy.x, enemy.z, width, height, Math.max(.025, bob), enemy.facing, flash)
+      if (enemy.mode === 1) {
+        const length = enemy.kind === 'bolt' ? 5.8 : 4.4
+        const count = enemy.kind === 'bolt' ? 7 : 5
+        for (let i = 0; i < count; i++) {
+          const a = .63 + length * i / count
+          const b = a + .39
+          line(enemy.x + enemy.dx * a, enemy.z + enemy.dz * a, enemy.x + enemy.dx * b, enemy.z + enemy.dz * b, enemy.kind === 'bolt' ? .22 : .09, enemy.kind === 'bolt' ? RUST : LILAC)
+        }
+      }
+    }
+    for (const projectile of run.projectiles) {
+      if (!projectile.active) continue
+      sprites.add('projectile', projectile.x, projectile.z, .43, .43, .17)
+      line(projectile.x - projectile.dx * .48, projectile.z - projectile.dz * .48, projectile.x, projectile.z, .12, LILAC, .16)
+    }
+
+    const { player } = run
+    const moving = player.moving && run.tick % 24 >= 12
+    const flash = run.tick - player.hurtAt < 17 && Math.floor(run.tick / 3) % 2 === 0 ? .89 : 0
+    shadow(player.x, player.z, .55, .33)
+    marker(player.x, player.z, .43, run.tick < run.boostUntil ? GOLD : MINT)
+    sprites.add(moving ? 'engineer-step' : 'engineer', player.x, player.z, 1.08, 1.43, .06, player.facing, flash)
+    if (run.boss.active) {
+      const { boss } = run
+      shadow(boss.x, boss.z, 1.88, 1.22)
+      marker(boss.x, boss.z, 1.93, RUST)
+      sprites.add('boss', boss.x, boss.z, 3.52, 3.54, .11 + Math.sin(time * 8) * .087, 1, boss.flashUntil > run.tick ? .63 : 0)
+      for (let i = 0; i < run.waves.length; i++) drawWave(run.waves[i], run, i)
+    }
+
+    for (const effect of run.effects) {
+      if (effect.until <= run.tick) continue
+      const progress = (run.tick - effect.from) / (effect.until - effect.from)
+      if (effect.kind === 'slice') {
+        const dx = effect.toX - effect.x
+        const dz = effect.toZ - effect.z
+        const at = Math.min(.96, .47 + progress * .64)
+        const withBoost = run.tick < run.boostUntil
+        line(effect.x + dx * .09, effect.z + dz * .09, effect.x + dx * at, effect.z + dz * at, .14 * (1 - progress) + .045, withBoost ? GOLD : MINT, .12)
+        line(effect.x + dx * .22 - dz * .024, effect.z + dz * .22 + dx * .024, effect.x + dx * at - dz * .021, effect.z + dz * at + dx * .021, .06 * (1 - progress) + .025, withBoost ? RUST : ICE, .11)
+        if (progress < .48) sprites.add('spark', effect.toX, effect.toZ, .37, .39, .57, 1, .35)
+      } else if (effect.kind === 'hit') {
+        for (let i = 0; i < 4; i++) {
+          const angle = (effect.from * .31 + i * 1.57) % TAU
+          const distance = .17 + progress * .64
+          sprites.add('spark', effect.x + Math.cos(angle) * distance, effect.z + Math.sin(angle) * distance, .24 * (1.25 - progress), .22 * (1.25 - progress), .3 + progress * .43)
+        }
+      } else if (effect.kind === 'dash') {
+        line(effect.x, effect.z, effect.toX, effect.toZ, .22 * (1 - progress) + .02, ICE, .05)
+      } else if (effect.kind === 'clear') {
+        marker(effect.x, effect.z, .9 + progress * 13, GOLD, .055)
+        marker(effect.x, effect.z, .4 + progress * 9.8, MINT, .056)
+      } else if (effect.kind === 'toolPickup') {
+        marker(effect.x, effect.z, .46 + progress * 2.1, MINT, .054)
+      } else if (effect.kind === 'pickup' || effect.kind === 'arrival') {
+        marker(effect.x, effect.z, .5 + progress * (effect.kind === 'arrival' ? 5.8 : 2.3), effect.kind === 'arrival' ? RUST : GOLD, .055)
+      } else {
+        drawToolEffect(effect, progress)
+      }
+    }
+  }
+
+  function drawTitle(time: number) {
+    const portrait = aspect < 1
+    const x = portrait ? 2.1 : 6.0
+    const z = portrait ? -2.0 : .35
+    shadow(x, z, 1.1, .62)
+    marker(x, z, 1.13 + Math.sin(time * 2) * .08, MINT)
+    sprites.add('engineer', x, z, 2.1, 2.8, .1 + Math.sin(time * 2) * .07)
+    marker(x + 3.4, z - 3.2, .74, GOLD)
+    sprites.add('pass', x + 3.4, z - 3.2, .87, .9, .26 + Math.sin(time * 2.7) * .13)
+    const layout: { name: SpriteName; x: number; z: number; w: number; h: number }[] = [
+      { name: 'blank', x: -3.9, z: -.8, w: 1.43, h: 1.18 },
+      { name: 'blank', x: 4.8, z: 2.7, w: 1.16, h: 1.02 },
+      { name: 'bolt', x: 1.8, z: 3.7, w: 1.45, h: 1.78 },
+      { name: 'phantom', x: -.8, z: -4.2, w: 1.35, h: 1.63 },
+    ]
+    for (const prop of layout) {
+      shadow(x + prop.x, z + prop.z, prop.w * .45, prop.w * .25)
+      sprites.add(prop.name, x + prop.x, z + prop.z, prop.w, prop.h, .1 + .055 * Math.sin(time * 2 + prop.x), prop.x > 0 ? -1 : 1)
+    }
+    const aimX = x - 3.9
+    const aimZ = z - .8
+    const blink = Math.pow(.5 + Math.sin(time * 4.1) * .5, 8)
+    if (blink > .19) {
+      line(x, z, aimX, aimZ, .09 + blink * .08, MINT, .105)
+      sprites.add('spark', aimX, aimZ, .51, .57, .45, 1, .6)
+    }
+    for (let i = 0; i < 5; i++) {
+      const angle = i * 1.3
+      sprites.add('xp', x + Math.cos(angle) * 2, z + Math.sin(angle) * 2, .29, .34, .08 + .13 * (.5 + .5 * Math.sin(time * 2 + i)))
+    }
+  }
+
+  function icon(destination: HTMLCanvasElement, name: SpriteName) {
+    const context = destination.getContext('2d')
+    if (!context) return
+    const frame = atlas.frames[name]
+    const scale = Math.min(destination.width / frame.width, destination.height / frame.height)
+    const width = Math.max(1, Math.floor(frame.width * scale))
+    const height = Math.max(1, Math.floor(frame.height * scale))
+    context.clearRect(0, 0, destination.width, destination.height)
+    context.imageSmoothingEnabled = false
+    context.drawImage(atlas.canvas, frame.x, frame.y, frame.width, frame.height, Math.round((destination.width - width) / 2), Math.round((destination.height - height) / 2), width, height)
+  }
+
+  function render(run: Run | null, milliseconds: number, trainingTarget?: { x: number; z: number } | null) {
+    sprites.clear()
+    shadows.count = 0
+    markings.count = 0
+    strips.count = 0
+    for (const wave of wavers) wave.visible = false
+    if (run) {
+      drawFloor(run)
+      if (trainingTarget) {
+        marker(trainingTarget.x, trainingTarget.z, .84 + Math.sin(run.tick / 10) * .08, MINT, .08)
+        marker(trainingTarget.x, trainingTarget.z, .46, MINT, .08)
+      }
+      const targetX = aspect < 1.19 ? run.player.x * .64 : run.player.x * .12
+      const targetZ = aspect < .9 ? run.player.z * .49 : run.player.z * .12
+      cameraX += (targetX - cameraX) * .105
+      cameraZ += (targetZ - cameraZ) * .105
+    } else {
+      const portrait = aspect < 1
+      cameraX = portrait ? 1.5 : -2.3
+      cameraZ = portrait ? .9 : -1.58
+      drawTitle(milliseconds / 1000)
+    }
+
+    const margin = aspect >= 1.19 ? 3.05 : Math.max(0, ARENA.x - viewWidth * .29)
+    cameraX = Math.max(-margin, Math.min(margin, cameraX))
+    camera.position.set(cameraX, 28, cameraZ + 24)
+    camera.lookAt(cameraX, 0, cameraZ)
+    sprites.flush()
+    for (const batch of floorBatches) {
+      if (!batch.count) continue
+      batch.instanceMatrix.needsUpdate = true
+      if (batch.instanceColor) batch.instanceColor.needsUpdate = true
+    }
+
+    renderer.setRenderTarget(target)
+    renderer.render(world, camera)
+    renderer.setRenderTarget(null)
+    renderer.render(display, flatCamera)
+  }
+
+  return { render, icon, canvas: renderer.domElement }
+}
