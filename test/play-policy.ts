@@ -1,4 +1,4 @@
-import { ARENA, HZ, angleDistance, inPress, isWeapon, nearestShortcut, nearestTool, type Input, type Run } from '../src/simulation.hot.ts'
+import { ARENA, HZ, angleDistance, inPress, isWeapon, nearestShortcut, nearestTool, previewToolStats, type Input, type Run } from '../src/simulation.hot.ts'
 import { createCrowd, detourTowardPlayer } from '../src/enemy-crowd.ts'
 import { PLAYER_CLEARANCE, stationContact } from '../src/floor-plan.ts'
 
@@ -14,7 +14,7 @@ export function pickTestUpgrade(run: Run) {
   for (let i = 0; i < run.choices.length; i++) {
     const option = run.choices[i]
     const preference = option === 'guard' && run.player.hp < 76 ? 24
-      : option === 'caliper' ? 18
+      : option === run.activeTool ? 18
         : isWeapon(option) && (option === 'tape' || option === 'saw') ? 16
       : option === 'sweep' && run.ranks.sweep < 3 ? 14
         : option === 'power' ? 11
@@ -64,7 +64,8 @@ function bossMovement(run: Run): Input {
     earliest = untilHit
     targetAngle = wave.gapCenter
   }
-  const radius = 3.85
+  const tool = run.activeTool
+  const radius = tool ? Math.min(3.85, previewToolStats(run, tool, run.ranks[tool]).reach - .25) : 3.85
   const moveX = run.boss.x + Math.cos(targetAngle) * radius - p.x
   const moveZ = run.boss.z + Math.sin(targetAngle) * radius - p.z
   const dash = earliest < 17 && angleDistance(angle, targetAngle) > 0.65 && distance > 2.3

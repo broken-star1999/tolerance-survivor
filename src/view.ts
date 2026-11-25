@@ -570,7 +570,8 @@ export function createGameView(host: HTMLElement) {
 
     const { player } = run
     const dashing = run.tick < player.dashUntil && player.moving
-    const stroke = run.effects.find(effect => effect.kind === 'slice' && run.tick - effect.from < 12 && effect.until > run.tick)
+    const strokeKind = run.activeTool === 'caliper' ? 'slice' : run.activeTool
+    const stroke = run.effects.find(effect => effect.kind === strokeKind && run.tick - effect.from < 12 && effect.until > run.tick)
     const dx = dashing ? player.dashX : !player.moving && stroke ? stroke.toX - player.x : player.dx
     const dz = dashing ? player.dashZ : !player.moving && stroke ? stroke.toZ - player.z : player.dz
     const desired = Math.atan2(dx, dz)
@@ -581,7 +582,7 @@ export function createGameView(host: HTMLElement) {
     inspector.group.position.set(player.x, 0, player.z)
     inspector.group.scale.setScalar(1.18)
     const flash = Math.max(0, 1 - (run.tick - player.hurtAt) / 15)
-    inspector.pose(time, player.moving, dashing, stroke ? 1 - (run.tick - stroke.from) / 12 : 0, run.ranks.caliper > 0, flash)
+    inspector.pose(time, player.moving, dashing, stroke ? 1 - (run.tick - stroke.from) / 12 : 0, run.activeTool, flash)
     shadow(player.x - .06, player.z - .024, .46, .27)
     castShadow(player.x, player.z, .37, dashing ? .97 : .75)
     marker(player.x, player.z, .50, run.tick < run.boostUntil ? GOLD : MINT)
@@ -693,7 +694,7 @@ export function createGameView(host: HTMLElement) {
     inspector.group.scale.setScalar(portrait ? 2.84 : 3.03)
     inspector.group.position.set(x, 0, z)
     inspector.group.rotation.y = .36 + Math.sin(time * .85) * .18
-    inspector.pose(time, false, false, (.5 + .5 * Math.sin(time * 3.5)) ** 6 * .64, true, 0)
+    inspector.pose(time, false, false, (.5 + .5 * Math.sin(time * 3.5)) ** 6 * .64, 'caliper', 0)
     shadow(x, z, 1.32, .74)
     castShadow(x, z, .86, 1.76)
     marker(x, z, 1.44 + bob, MINT)

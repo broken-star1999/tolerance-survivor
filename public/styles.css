@@ -240,10 +240,14 @@ kbd {
 .equipment .weapon-icons { display: flex; gap: 3px; min-width: 0; }
 .weapon-chip {
   position: relative; display: grid; place-items: center; width: 33px; min-height: 31px;
+  padding: 0; pointer-events: auto; touch-action: manipulation;
   color: #e9e9d2; border: 1px solid #697481; background: linear-gradient(145deg,#334453,#202e3b);
 }
 .weapon-chip.calibrated { border-color: #c6a56c; background: linear-gradient(135deg,#463e33,#2b3339); }
+.weapon-chip:hover { border-color: var(--brass); }
+.weapon-chip[aria-pressed="true"] { border-color: var(--mint); background: #2a4b49; box-shadow: inset 0 -2px #83c5b0; }
 .weapon-chip canvas { width: 22px; height: 22px; margin-bottom: 4px; image-rendering: pixelated; }
+.weapon-key { position: absolute; top: 1px; left: 2px; color: #d9e2df; font: 750 8px/1 var(--mono); }
 .weapon-chip b { position: absolute; right: 2px; bottom: 1px; font: 750 7px/1 var(--mono); color: #fce6b2; }
 .gear-details { display: grid; gap: 2px; min-width: 55px; }
 .gear-details strong { color: #e8f1ed; font-size: 11px; }.gear-details span { color: #bdcdd2; font-size: 9px; }
@@ -414,8 +418,8 @@ kbd {
   .training-header, .training-panel kbd { font-size: 9px; }
   .hud-bottom { bottom: 8px; gap: 4px; grid-template-columns: minmax(0,1fr) minmax(76px,.83fr) minmax(0,.67fr); }
   .equipment, .risk-panel, .dash-panel { padding: 4px; min-height: 34px; }
-  .equipment { gap: 2px; }.equipment .weapon-icons { flex-wrap: wrap; gap: 2px; max-width: 76px; }
-  .weapon-chip { width: 23px; min-height: 23px; }.weapon-chip canvas { width: 16px; height: 16px; }.weapon-chip b { font-size: 6px; }
+  .equipment { gap: 2px; }.equipment .weapon-icons { flex-wrap: wrap; gap: 2px; max-width: 104px; }
+  .weapon-chip { width: 33px; min-height: 32px; }.weapon-chip canvas { width: 21px; height: 21px; }
   .equipment .gear-details { display: none; }
   .risk-panel > div:first-child, .review-count, .risk-panel strong, .dash-panel > div:first-child { font-size: 9px; gap: 3px; }
   .dash-panel { min-width: 54px; }
@@ -437,6 +441,7 @@ kbd {
   .touch-controls:not([hidden]) { display: flex; }
   .enter-hint, .keyboard-tip, .control-legend, .shortcut-instruction kbd, .dash-panel kbd { display: none; }
   .touch-legend { display: flex; }
+  .weapon-key { display: none; }
   .stage { --contexts: 168px; }
 }
 @media (max-height: 490px) and (orientation: landscape) {

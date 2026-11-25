@@ -3,7 +3,7 @@ import test from 'node:test'
 import { PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
 import {
   BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
-  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
+  chooseUpgrade, createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
   type Run,
 } from '../src/simulation.hot.ts'
 import { pickTestUpgrade, testInput } from './play-policy.ts'
@@ -178,10 +178,12 @@ test('tools unlock on contact at Lv.1 and only picked tools can appear in upgrad
   run.player.z = caliper.z
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.toolPickup)
   assert.equal(run.ranks.caliper, 1)
+  assert.equal(run.activeTool, 'caliper')
   assert.equal(hazardValue(run), 0)
   run.tools.push({ active: true, kind: 'wrench', x: run.player.x, z: run.player.z })
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.toolPickup)
   assert.equal(run.ranks.wrench, 1)
+  assert.equal(run.activeTool, 'caliper')
   run.xp = run.xpGoal
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.level)
   assert.ok(run.choices.includes('caliper') || run.choices.includes('wrench'))
@@ -193,24 +195,48 @@ test('tools unlock on contact at Lv.1 and only picked tools can appear in upgrad
   assert.equal(run.tools.every(tool => !tool.active), true)
 })
 
+test('one equipped tool strikes and switching carries the current cooldown', () => {
+  const run = createRun(81)
+  emptyFloor(run)
+  assert.equal(equipTool(run, 'wrench'), false)
+  run.ranks.caliper = 2
+  run.ranks.wrench = 1
+  assert.equal(equipTool(run, 'caliper'), true)
+  run.nextAttack = 0
+  const part = run.enemies[0]
+  Object.assign(part, { active: true, x: 2, z: .6, speed: 0, hp: 300 })
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.strike)
+  assert.ok(run.effects.some(effect => effect.kind === 'slice'))
+  assert.equal(run.effects.some(effect => effect.kind === 'wrench'), false)
+  const ready = run.nextAttack
+  assert.equal(equipTool(run, 'wrench'), true)
+  assert.equal(run.ranks.caliper, 2)
+  assert.equal(run.nextAttack, ready)
+  while (run.tick + 1 < ready) assert.equal(advanceRun(run, IDLE_INPUT) & Signal.strike, 0)
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.strike)
+  assert.ok(run.effects.some(effect => effect.kind === 'wrench' && effect.from === run.tick))
+})
+
 test('wrench cancels charging, and a file delivers its damage in three discrete strokes', () => {
   const run = createRun(81)
   emptyFloor(run)
-  run.nextAttack = Infinity
+  run.nextAttack = 0
   const bolt = run.enemies[0]
   Object.assign(bolt, { active: true, kind: 'bolt', x: 1.55, z: 0.6, speed: .1, mode: 1, until: 200, hp: 250 })
   run.ranks.wrench = 1
+  assert.equal(equipTool(run, 'wrench'), true)
   advanceRun(run, IDLE_INPUT)
   assert.equal(bolt.mode, 0)
   const afterWrench = bolt.hp
-  run.ranks.wrench = 0
   run.ranks.file = 1
+  assert.equal(equipTool(run, 'file'), true)
+  run.nextAttack = run.tick
   advanceRun(run, IDLE_INPUT)
-  assert.equal(bolt.fileHits, 3)
-  assert.equal(bolt.hp, afterWrench)
+  assert.equal(bolt.fileHits, 2)
+  assert.ok(bolt.hp < afterWrench)
   for (let i = 0; i < 25; i++) advanceRun(run, IDLE_INPUT)
   assert.equal(bolt.fileHits, 0)
-  assert.ok(Math.abs(bolt.hp - (afterWrench - 38)) < .0001)
+  assert.ok(Math.abs(bolt.hp - (afterWrench - previewToolStats(run, 'file', 1).damage)) < .0001)
 })
 
 test('the training pass and training pickups are isolated from a new shift', () => {
@@ -256,6 +282,8 @@ test('pausing to read a lesson leaves its wrench practice target available', () 
   run.player.x = wrench.x
   run.player.z = wrench.z
   advanceRun(run, IDLE_INPUT)
+  assert.equal(run.activeTool, null)
+  assert.equal(equipTool(run, 'wrench'), true)
   const x = bolt.x - run.player.x
   const z = bolt.z - run.player.z
   for (let i = 0; i < HZ; i++) advanceRun(run, { x, z, dash: false, accept: false })
@@ -281,7 +309,7 @@ test('inspection requires staying put, isolates only its batch and closes the sh
   for (let i = 0; i < INSPECTION_HOLD - 1; i++) advanceRun(run, IDLE_INPUT)
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.inspection)
   assert.equal(run.inspections[0].isolated, 18)
-  assert.equal(run.inspections[0].recovery, 12)
+  assert.equal(run.inspections[0].recovery, 18)
   assert.ok(run.enemies.some(enemy => enemy.active && enemy.batch < 0))
   assert.equal(shortcut.active, false)
   assert.equal(run.incident, null)
@@ -331,14 +359,15 @@ test('a missed inspection prevents release even after the test rig is stopped wi
 test('the calibrated file delivers the higher previewed damage in four strokes', () => {
   const run = createRun(81)
   emptyFloor(run)
-  run.nextAttack = Infinity
+  run.nextAttack = 0
   const part = run.enemies[0]
   Object.assign(part, { active: true, x: 1.55, z: 0.6, speed: .1, hp: 250 })
   run.ranks.file = 3
+  assert.equal(equipTool(run, 'file'), true)
   const expected = previewToolStats(run, 'file', 3).damage
   assert.ok(expected > previewToolStats(run, 'file', 2).damage)
   advanceRun(run, IDLE_INPUT)
-  assert.equal(part.fileHits, 4)
+  assert.equal(part.fileHits, 3)
   for (let i = 0; i < 36; i++) advanceRun(run, IDLE_INPUT)
   assert.equal(part.fileHits, 0)
   assert.ok(Math.abs(part.hp - (250 - expected)) < .0001)

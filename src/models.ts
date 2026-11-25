@@ -4,6 +4,7 @@ import {
 } from 'three'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
+import type { ToolKind } from './simulation.hot.ts'
 
 type Position = readonly [number, number, number]
 type Dimensions = readonly [number, number, number]
@@ -155,12 +156,57 @@ export function createInspector() {
   tool.box([.068, .012, .016], [.104, .078, .063], teal, .012)
   for (const x of [-.058, -.017, .124, .157]) tool.box([x, .028, .032], [.011, .013, .016], iron)
   const caliper = tool.finish(surface)
-  caliper.position.set(.018, -.394, .147)
-  caliper.rotation.z = -.21
   caliper.scale.setScalar(1.17)
-  rightArm.add(caliper)
 
-  function pose(time: number, moving: boolean, dashing: boolean, measuring: number, equipped: boolean, hit: number) {
+  const wrench = parts()
+  wrench.box([.045, 0, 0], [.43, .072, .072], alloy, .016)
+  wrench.box([-.178, 0, 0], [.15, .148, .076], alloy, .018)
+  for (const side of [-1, 1]) {
+    wrench.box([-.232, .066 * side, 0], [.135, .059, .069], '#bbcfcf', .013)
+  }
+  wrench.box([.196, .018, .035], [.10, .035, .026], '#667f8a', .008)
+
+  const file = parts()
+  file.box([-.16, 0, 0], [.235, .120, .11], teal, .032)
+  file.box([-.043, 0, 0], [.06, .092, .09], warm, .015)
+  file.box([.167, 0, 0], [.366, .097, .052], '#83989e', .009)
+  for (const x of [.042, .094, .146, .198, .250, .302]) {
+    file.box([x, .034, .03], [.014, .049, .014], '#c1cbc1')
+  }
+
+  const saw = parts()
+  saw.box([.105, .031, 0], [.415, .143, .043], alloy, .006)
+  for (const x of [-.061, .005, .071, .137, .203, .269]) {
+    saw.box([x, -.055, 0], [.036, .047, .036], '#d8ded0', .004)
+  }
+  saw.box([-.213, 0, 0], [.164, .176, .085], warm, .032)
+  saw.box([-.215, .013, .05], [.084, .083, .028], rubber, .015)
+
+  const tape = parts()
+  tape.box([0, .019, 0], [.253, .220, .142], warm, .041)
+  tape.box([-.022, .041, .01], [.215, .187, .142], yellow, .036)
+  tape.box([-.047, .041, .091], [.121, .092, .026], teal, .014)
+  tape.box([.186, -.040, .018], [.166, .044, .048], highlight, .006)
+  tape.box([.260, -.053, .020], [.025, .066, .054], alloy, .006)
+
+  const mallet = parts()
+  mallet.box([.053, 0, 0], [.49, .075, .070], warm, .015)
+  mallet.box([.232, .04, 0], [.165, .257, .147], '#38525b', .027)
+  for (const side of [-1, 1]) {
+    mallet.box([.232, .04 + .122 * side, 0], [.174, .058, .151], rubber, .013)
+  }
+
+  const tools: [ToolKind, Mesh][] = [
+    ['caliper', caliper], ['wrench', wrench.finish(surface)], ['file', file.finish(surface)],
+    ['saw', saw.finish(surface)], ['tape', tape.finish(surface)], ['mallet', mallet.finish(surface)],
+  ]
+  for (const [, mesh] of tools) {
+    mesh.position.set(.018, -.394, .147)
+    mesh.rotation.z = -.21
+    rightArm.add(mesh)
+  }
+
+  function pose(time: number, moving: boolean, dashing: boolean, measuring: number, equipped: ToolKind | null, hit: number) {
     const walk = moving ? Math.sin(time * 11.8) : 0
     const swing = walk * (dashing ? .77 : .46)
     leftLeg.rotation.x = swing - (dashing ? .21 : 0)
@@ -172,7 +218,7 @@ export function createInspector() {
     center.rotation.z = walk * .035
     center.position.y = moving ? .041 * Math.abs(walk) + (dashing ? .042 : 0) : .011 * (1 + Math.sin(time * 3))
     head.rotation.x = -.65 * center.rotation.x
-    caliper.visible = equipped
+    for (const [kind, mesh] of tools) mesh.visible = kind === equipped
     surface.emissive.setRGB(hit * .21, hit * .067, hit * .024)
   }
 
