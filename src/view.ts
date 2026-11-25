@@ -4,7 +4,7 @@ import {
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
-import { ARENA, DASH_COOLDOWN, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { ARENA, DASH_COOLDOWN, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUT_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
 import { stationContact } from './floor-plan.ts'
 import { createInspector, createTestRig } from './models.ts'
 import { createSpriteAtlas, type SpriteName } from './sprites.ts'
@@ -523,7 +523,7 @@ export function createGameView(host: HTMLElement) {
       if (!shortcut.active) continue
       const pulse = .5 + .5 * Math.sin(time * 4)
       const color = shortcut.kind === 'pass' ? GOLD : LILAC
-      marker(shortcut.x, shortcut.z, 1.11 + pulse * .23, color)
+      marker(shortcut.x, shortcut.z, SHORTCUT_RADIUS, color)
       marker(shortcut.x, shortcut.z, .46, color)
       shadow(shortcut.x, shortcut.z, .57, .31)
       sprites.add(shortcut.kind, shortcut.x, shortcut.z, 1.02, 1.05, .25 + pulse * .27)
@@ -811,5 +811,11 @@ export function createGameView(host: HTMLElement) {
     renderer.render(display, flatCamera)
   }
 
-  return { render, icon, canvas: renderer.domElement }
+  function offscreenSide(x: number) {
+    const offset = x - cameraX
+    const limit = viewWidth / 2 - .48
+    return offset < -limit ? 'left' : offset > limit ? 'right' : null
+  }
+
+  return { render, icon, offscreenSide, canvas: renderer.domElement }
 }

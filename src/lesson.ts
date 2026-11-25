@@ -22,7 +22,7 @@ export const LESSON_COPY = {
   },
   shortcut: {
     number: 5, title: '处置超差样件', line: '这批赶着装配。绿圈复检要留 1.6 秒，免检能救急，但会放进超差件。',
-    desktop: '绿圈复检 · 黄圈按 E', touch: '绿圈复检 · 黄圈点「放行」',
+    desktop: '绿圈复检 · 黄圈按 E', touch: '绿圈复检 · 黄圈点「免检放行」',
   },
   wave: {
     number: 6, title: '从缺口躲开冲击波', line: '免检件进入装配。沿绿色箭头找缺口，躲过这一轮的两道波。',

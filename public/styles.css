@@ -203,10 +203,20 @@ kbd {
 .incident-panel strong, .inspection-card strong { color: #ffe3b6; font-size: 12px; }
 .incident-panel time, .inspection-card > div:first-child span { color: #f9dca6; font: 750 11px/1.2 var(--mono); white-space: nowrap; }
 .incident-panel p { margin: 0; color: #decdba; font-size: 11px; line-height: 1.48; }
+.incident-panel .incident-direction { color: #ffd492; font-weight: 800; }
 .incident-panel .batch-reading, .training-panel .batch-reading {
   white-space: pre-line; border-block: 1px solid #a788674f; padding-block: 4px;
   color: #ffe2b2; font-size: 11px; font-variant-numeric: tabular-nums;
 }
+.objective-marker {
+  position: absolute; display: flex; align-items: center; gap: 5px;
+  left: var(--inset); top: 48%; transform: translateY(-50%);
+  padding: 4px 7px; border: 1px solid #7daea0; background: #132a2bf5;
+  color: #d0f5e2; font-size: 11px; line-height: 1.3; font-weight: 800;
+}
+.objective-marker[data-side="right"] { left: auto; right: var(--inset); flex-direction: row-reverse; }
+.objective-arrow::before { content: "←"; color: var(--mint); font: 800 14px/1 var(--mono); }
+.objective-marker[data-side="right"] .objective-arrow::before { content: "→"; }
 .toast {
   right: var(--inset); width: max-content; max-width: min(246px, 42%); display: grid; gap: 3px;
   padding: 7px 9px; text-align: left; border-right: 3px solid #80baac; background: #131f2bf0;
@@ -274,6 +284,8 @@ kbd {
   background: #2a2025f2;
 }
 .shortcut-card { left: var(--inset); width: max-content; max-width: min(390px, calc(100% - 30px)); color: #f0ddbd; }
+.shortcut-card[data-kind="beautifier"] { border-color: #ae88bd; background: #2e2436f2; }
+.shortcut-card[data-kind="beautifier"] .shortcut-card-top strong { color: #f2d1ef; }
 .shortcut-card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .shortcut-card-top strong { color: #ffe2ae; font-size: 14px; }
 .shortcut-card-top span { color: #ffc2a0; font-size: 10px; font-weight: 850; white-space: nowrap; }
@@ -367,7 +379,16 @@ kbd {
   border: 1px solid #9cb6bb; background: linear-gradient(#2f4657ee,#192b3aee);
   color: #f2f6ee; font-size: 12px; font-weight: 850;
 }
-.touch-actions button:first-child { border-color: #c9a36e; color: #ffe3b8; }
+#touch-accept { min-width: 72px; touch-action: manipulation; border-color: #c9a36e; color: #ffe3b8; white-space: nowrap; }
+#touch-accept:active { background: #503b2c; }
+#touch-accept[data-kind="beautifier"] { border-color: #b887c3; color: #f2d1ef; }
+#touch-accept[data-kind="beautifier"]:active { background: #493151; }
+#touch-dash { position: relative; padding-bottom: 5px; }
+#touch-dash:disabled { opacity: .72; }
+.touch-dash-meter { position: absolute; inset: auto 6px 4px; height: 3px; background: #0f1a27; }
+.touch-dash-meter i { display: block; height: 100%; transform-origin: left center; background: #88c8ed; }
+#touch-dash.dash-ready { border-color: var(--mint); color: #d9f8e5; }
+#touch-dash.dash-ready .touch-dash-meter i { background: var(--mint); }
 
 .workstation:fullscreen { width: 100%; margin: 0; padding: 6px 9px; display: grid; grid-template-rows: auto minmax(0,1fr); background: var(--body); }
 .workstation:fullscreen .stage { height: 100%; min-height: 0; }
@@ -439,7 +460,7 @@ kbd {
 }
 @media (pointer: coarse) {
   .touch-controls:not([hidden]) { display: flex; }
-  .enter-hint, .keyboard-tip, .control-legend, .shortcut-instruction kbd, .dash-panel kbd { display: none; }
+  .enter-hint, .keyboard-tip, .control-legend, .shortcut-instruction kbd, .dash-panel { display: none; }
   .touch-legend { display: flex; }
   .weapon-key { display: none; }
   .stage { --contexts: 168px; }

@@ -1,6 +1,6 @@
 import {
   BOSS_HP, BOSS_TICK, CALIBRATIONS, DASH_BUFFER, DASH_COOLDOWN, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS,
-  SHORTCUT_TICKS, SURGES, Signal, UPGRADES,
+  SHORTCUT_RADIUS, SHORTCUT_TICKS, SURGES, Signal, UPGRADES,
   TOOL_IDS, WEAPON_SLOTS, advanceRun, chooseUpgrade, previewToolStats,
   createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestShortcut, nearestTool, surgeGroupAt, waveCount, waveGapDegrees, weaponCount,
   type Input, type Run, type ToolKind,
@@ -8,7 +8,11 @@ import {
 import { createSound } from './sound.ts'
 import { LESSON_COPY, LESSON_STEPS, advanceLesson, createLesson, equipInLesson, type Lesson } from './lesson.ts'
 import { createGameView } from './view.ts'
+import { ARENA, type GroundPoint } from './floor-plan.ts'
 import type { SpriteName } from './sprites.ts'
+
+const FLICK_DISTANCE = 52
+const FLICK_WINDOW = 220
 
 function element<T extends HTMLElement = HTMLElement>(id: string) {
   const found = document.getElementById(id)
@@ -41,6 +45,15 @@ const batchReadings = INCIDENTS.map(({ measurement }) => {
     summary: name + ' · 要求 ' + spec + '\n实测 ' + actual + ' · 超差 ' + excess + ' ' + unit,
   }
 })
+
+function entranceGuide(parts: readonly GroundPoint[]) {
+  const sides = new Set<string>()
+  for (const { x, z } of parts) {
+    if (ARENA.x - Math.abs(x) < ARENA.z - Math.abs(z)) sides.add(x < 0 ? '左侧' : '右侧')
+    else sides.add(z < 0 ? '上方' : '下方')
+  }
+  return ['左侧', '右侧', '上方', '下方'].filter(side => sides.has(side)).join('、') + '进场'
+}
 
 export function createApplication() {
   const workstation = element('workstation')
@@ -76,8 +89,11 @@ export function createApplication() {
   const incidentPanel = element('incident-panel')
   const incidentTitle = element('incident-title')
   const incidentTime = element('incident-time')
+  const incidentDirection = element('incident-direction')
   const incidentDetail = element('incident-detail')
   const incidentReading = element('incident-reading')
+  const objectiveMarker = element('objective-marker')
+  const objectiveLabel = element('objective-label')
   const inspectionCard = element('inspection-card')
   const inspectionProgress = element('inspection-progress')
   const inspectionHint = element('inspection-hint')
@@ -126,6 +142,8 @@ export function createApplication() {
   const floatingStick = element('floating-stick')
   const touchAccept = element<HTMLButtonElement>('touch-accept')
   const touchDash = element<HTMLButtonElement>('touch-dash')
+  const touchDashFill = element('touch-dash-fill')
+  const touchDevice = matchMedia('(pointer: coarse)')
   const view = createGameView(element('game-view'))
   const sound = createSound()
 
@@ -158,18 +176,26 @@ export function createApplication() {
     ['Digit' + (index + 1), index], ['Numpad' + (index + 1), index],
   ]))
 
-  function clearControls(keepMovement = false) {
-    if (!keepMovement) held.clear()
-    dashQueued = false
-    acceptQueued = false
+  function resetStick() {
+    const pointer = joystickId
+    joystickId = -1
+    if (pointer !== -1 && stage.hasPointerCapture(pointer)) stage.releasePointerCapture(pointer)
     touchX = 0
     touchZ = 0
-    joystickId = -1
-    flickX = 0
-    flickZ = 0
     stick.style.transform = ''
     floatingStick.style.transform = ''
     floatingJoystick.hidden = true
+  }
+
+  function clearControls(keepMovement = false) {
+    if (!keepMovement) {
+      held.clear()
+      resetStick()
+    }
+    dashQueued = false
+    acceptQueued = false
+    flickX = 0
+    flickZ = 0
     if (run) run.player.dashBufferedUntil = -1
   }
 
@@ -220,19 +246,30 @@ export function createApplication() {
     const dashDelay = Math.max(0, run.player.dashReadyAt - run.tick)
     text(dashText, dashDelay === 0 ? '冲刺就绪' :
       run.player.dashBufferedUntil >= run.tick ? '冲刺已预备' : '冲刺恢复')
-    meter(dashFill, 1 - dashDelay / DASH_COOLDOWN)
+    const dashCharge = 1 - dashDelay / DASH_COOLDOWN
+    meter(dashFill, dashCharge)
+    if (touchDevice.matches) {
+      meter(touchDashFill, dashCharge)
+      touchDash.classList.toggle('dash-ready', dashDelay === 0)
+    }
     const activeIncident = run.phase === 'floor' ? run.incident : null
     const surge = run.phase === 'floor' ? run.surge : null
     incidentPanel.hidden = (!activeIncident && !surge) || !!lesson || run.choices.length > 0 || paused
     stage.classList.toggle('incident-active', !incidentPanel.hidden)
     incidentReading.hidden = !activeIncident
+    const arrivals = activeIncident
+      ? activeIncident.stage === 'warning' ? activeIncident.parts : undefined
+      : surge?.groups[surge.issued]
+    incidentDirection.hidden = incidentPanel.hidden || !arrivals?.length
+    if (arrivals?.length && !incidentDirection.hidden) text(incidentDirection, entranceGuide(arrivals))
     if (activeIncident) {
       const warning = activeIncident.stage === 'warning'
       const profile = INCIDENTS[activeIncident.slot]
       text(incidentTitle, profile.title)
       text(incidentTime, Math.ceil(((warning ? activeIncident.opensAt : activeIncident.closesAt) - run.tick) / HZ) + ' 秒')
       text(incidentReading, batchReadings[activeIncident.slot].summary)
-      text(incidentDetail, warning ? profile.detail : '绿圈复检 1.6 秒 · 黄圈是捷径')
+      text(incidentDetail, warning ? profile.detail
+        : '绿圈复检 1.6 秒 · ' + (activeIncident.shortcut.kind === 'pass' ? '黄圈免检' : '紫圈改写'))
       incidentPanel.dataset.stage = activeIncident.stage
     } else if (surge) {
       const profile = SURGES[surge.slot]
@@ -257,9 +294,10 @@ export function createApplication() {
       meter(inspectionFill, fraction)
     }
     shortcutCard.hidden = !shortcut || !inspectionCard.hidden || hideControls
-    const ready = shortcut && nearestShortcut(run, 1.65) !== undefined
+    const ready = shortcut && shortcutDistance < SHORTCUT_RADIUS
     if (shortcut && !shortcutCard.hidden) {
       const definition = SHORTCUTS[shortcut.kind]
+      if (shortcutCard.dataset.kind !== shortcut.kind) shortcutCard.dataset.kind = shortcut.kind
       text(shortcutName, definition.name)
       if (shortcut.kind === 'pass') {
         let remaining = 0
@@ -271,13 +309,19 @@ export function createApplication() {
         ? '原值 ' + reading.actual + ' → 改记 ' + reading.nominal
         : definition.trace
       text(shortcutConsequence, consequence + ' · ' + definition.consequence)
-      text(shortcutAction, ready ? '确认' + definition.action : '进入黄圈后可操作')
+      text(shortcutAction, ready
+        ? touchDevice.matches ? '点「' + definition.action + '」确认' : '确认' + definition.action
+        : '进入提示圈后可操作')
     }
     const tool = nearestTool(run)
     toolCard.hidden = !tool || Boolean(run.choices.length) || paused || !!shortcut || !inspectionCard.hidden || run.phase === 'ended'
     if (tool) text(toolName, UPGRADES[tool.kind].name)
+    touchAccept.hidden = !ready
     touchAccept.disabled = !ready
-    text(touchAccept, ready ? shortcut.kind === 'pass' ? '放行' : '改写' : '拾取')
+    if (ready) {
+      text(touchAccept, SHORTCUTS[shortcut.kind].action)
+      if (touchAccept.dataset.kind !== shortcut.kind) touchAccept.dataset.kind = shortcut.kind
+    }
     touchDash.disabled = dashDelay > DASH_BUFFER
   }
 
@@ -328,7 +372,6 @@ export function createApplication() {
   function showLessonStep() {
     if (!lesson) return
     const copy = LESSON_COPY[lesson.step]
-    const touchDevice = matchMedia('(pointer: coarse)').matches
     text(lessonProgress, '训练 ' + copy.number + ' / ' + LESSON_STEPS)
     text(lessonTitle, copy.title)
     const reviewed = Boolean(run?.inspections.length)
@@ -349,8 +392,8 @@ export function createApplication() {
     if (usingWrench) line = '现在只用扳手。靠近螺栓，试一次重击。'
     text(lessonDetail, line)
     const action = usingWrench ? '靠近螺栓'
-      : choosingWrench ? touchDevice ? '点工具栏的扳手' : '按 2 或点扳手'
-      : touchDevice ? copy.touch : copy.desktop
+      : choosingWrench ? touchDevice.matches ? '点工具栏的扳手' : '按 2 或点扳手'
+      : touchDevice.matches ? copy.touch : copy.desktop
     lessonAction.hidden = !action || resolved
     text(lessonAction, action)
     const done = lesson.step === 'done'
@@ -450,9 +493,10 @@ export function createApplication() {
     workstation.dataset.mode = 'upgrade'
     upgradeScreen.hidden = false
     touch.hidden = true
+    floatingJoystick.hidden = true
     text(upgradeLevel, '等级 ' + String(run.level).padStart(2, '0'))
     text(upgradeHint, lesson
-      ? matchMedia('(pointer: coarse)').matches ? '点一张卡片，确认后继续训练。' : '按 1 至 3 或点击卡片，确认后继续训练。'
+      ? touchDevice.matches ? '点一张卡片，确认后继续训练。' : '按 1 至 3 或点击卡片，确认后继续训练。'
       : '选定校准方案后继续值班。')
     upgradeOptions.replaceChildren()
     for (let index = 0; index < run.choices.length; index++) {
@@ -524,6 +568,7 @@ export function createApplication() {
     clearControls(true)
     upgradeScreen.hidden = true
     touch.hidden = false
+    floatingJoystick.hidden = joystickId === -1 || !dragAnywhere
     workstation.dataset.mode = lesson ? 'training' : run.phase
     updateGear()
     if (lesson) {
@@ -689,9 +734,26 @@ export function createApplication() {
     if (signal & Signal.end) showResult()
   }
 
+  function guideToObjective() {
+    if (!run || lesson || paused || run.choices.length || run.phase === 'ended') {
+      objectiveMarker.hidden = true
+      return
+    }
+    const station = run.incident?.stage === 'open' ? run.incident.inspection : undefined
+    const tool = !station && run.phase === 'floor' ? nearestTool(run, Infinity) : undefined
+    const rig = run.phase === 'boss' && run.boss.waveSets === 0 ? run.boss : undefined
+    const target = station ?? tool ?? rig
+    const side = target && view.offscreenSide(target.x)
+    objectiveMarker.hidden = !side
+    if (!side) return
+    if (objectiveMarker.dataset.side !== side) objectiveMarker.dataset.side = side
+    text(objectiveLabel, station ? '复检点' : tool ? UPGRADES[tool.kind].name : '试验台')
+  }
+
   function draw(milliseconds: number) {
     status()
     view.render(run, milliseconds, lesson?.marker)
+    guideToObjective()
   }
 
   function tickFrame(now: number) {
@@ -784,7 +846,7 @@ export function createApplication() {
       event.preventDefault()
       chooseTool(TOOL_IDS[option])
     } else if (event.code === 'Space') {
-      if (event.target instanceof HTMLButtonElement && event.target.matches('.weapon-chip:focus-visible')) return
+      if (event.target instanceof HTMLButtonElement && event.target.matches('.weapon-chip:focus-visible, #touch-accept:focus-visible')) return
       event.preventDefault()
       if (!event.repeat) dashQueued = true
     } else if (event.code === 'KeyE') {
@@ -821,7 +883,7 @@ export function createApplication() {
     stage.setPointerCapture(event.pointerId)
     joystickId = event.pointerId
     dragAnywhere = !fixed
-    pointerSince = performance.now()
+    pointerSince = event.timeStamp
     const bounds = (fixed ? joystick : stage).getBoundingClientRect()
     stickOriginX = fixed ? bounds.left + bounds.width / 2 : event.clientX
     stickOriginZ = fixed ? bounds.top + bounds.height / 2 : event.clientY
@@ -838,22 +900,17 @@ export function createApplication() {
   })
   function stopStick(event: PointerEvent) {
     if (joystickId !== event.pointerId) return
-    if (event.type === 'pointerup' && dragAnywhere && performance.now() - pointerSince < 240) {
+    if (event.type === 'pointerup' && dragAnywhere && !run?.choices.length && event.timeStamp - pointerSince < FLICK_WINDOW) {
       const dx = event.clientX - stickOriginX
       const dz = event.clientY - stickOriginZ
       const distance = Math.hypot(dx, dz)
-      if (distance > 38) {
+      if (distance >= FLICK_DISTANCE) {
         flickX = dx / distance
         flickZ = dz / distance
         dashQueued = true
       }
     }
-    joystickId = -1
-    touchX = 0
-    touchZ = 0
-    stick.style.transform = ''
-    floatingStick.style.transform = ''
-    floatingJoystick.hidden = true
+    resetStick()
   }
   stage.addEventListener('pointerup', stopStick)
   stage.addEventListener('pointercancel', stopStick)
@@ -862,10 +919,10 @@ export function createApplication() {
     event.preventDefault()
     dashQueued = true
   })
-  touchAccept.addEventListener('pointerdown', event => {
-    event.preventDefault()
-    acceptQueued = true
+  touchDash.addEventListener('click', event => {
+    if (event.detail === 0) dashQueued = true
   })
+  touchAccept.addEventListener('click', () => { acceptQueued = true })
 
   workstation.dataset.mode = 'title'
   draw(performance.now())

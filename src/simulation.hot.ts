@@ -10,6 +10,7 @@ export const MAX_ENEMIES = 180
 export const MAX_SHARDS = 480
 export const MAX_BOLTS = 90
 export const SHORTCUT_TICKS = [50 * HZ, 100 * HZ, 150 * HZ] as const
+export const SHORTCUT_RADIUS = 1.65
 export const INSPECTION_HOLD = 96
 export const INSPECTION_RADIUS = 1.36
 export const DASH_COOLDOWN = 72
@@ -31,13 +32,13 @@ const ENTRANCE_POINTS = [-1, 1].flatMap(side => [0, ENTRANCE_SPACING].flatMap(of
   ...Array.from({ length: 23 }, (_, index) => ({ x: (index - 11) * ENTRANCE_SPACING, z: side * (ENTRANCE_Z - offset) })),
 ])).filter(point => isOpenFloor(point.x, point.z, INCOMING_CLEARANCE))
 export const SURGES = [
-  { tick: 32 * HZ, title: '上料尖峰', detail: '整列超差件从一侧入场，沿空出来的一侧绕行。', first: 9, second: 4 },
+  { tick: 32 * HZ, title: '上料尖峰', detail: '超差件成列推进，沿空出来的一侧绕行。', first: 9, second: 4 },
   { tick: 122 * HZ, title: '复测积压', detail: '两批零件轮番压近，留意后到的远程干扰。', first: 12, second: 9 },
   { tick: 180 * HZ, title: '交班前满载', detail: '场边分批进料，留一条通往试验台的退路。', first: 16, second: 12 },
 ] as const
 export const INCIDENTS = [
   {
-    title: '装配催料', batch: '首批装配件', detail: '装配工位在等料，待检件将从场边入场。',
+    title: '装配催料', batch: '首批装配件', detail: '装配工位在等料，开工前核对衬套外径。',
     measurement: { name: '衬套外径', nominal: 20, tolerance: .05, measured: 20.08, unit: 'mm' },
   },
   {
@@ -45,7 +46,7 @@ export const INCIDENTS = [
     measurement: { name: '试验载荷', nominal: 4, tolerance: .10, measured: 4.24, unit: 'kN' },
   },
   {
-    title: '交付催验', batch: '末批待验件', detail: '交班前要核对垫片厚度，末批样件将从场边入场。',
+    title: '交付催验', batch: '末批待验件', detail: '交班前核对末批垫片厚度，超差件需要复检。',
     measurement: { name: '垫片厚度', nominal: 2, tolerance: .03, measured: 2.07, unit: 'mm' },
   },
 ] as const
@@ -1180,7 +1181,7 @@ function progressInspection(run: Run) {
 
 function acceptShortcut(run: Run) {
   const incident = run.incident
-  const shortcut = nearestShortcut(run, 1.65)
+  const shortcut = nearestShortcut(run, SHORTCUT_RADIUS)
   if (!shortcut || !incident || incident.shortcut !== shortcut) return 0
   closeIncident(run)
   run.accepted.push({ slot: incident.slot, kind: shortcut.kind, tick: run.tick })

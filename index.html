@@ -43,7 +43,7 @@
             <span><kbd>WASD</kbd> 移动</span>
             <span><kbd>空格</kbd> 冲刺</span>
             <span><kbd>1–6</kbd> 切换工具</span>
-            <span><kbd>E</kbd> 拾取捷径</span>
+            <span><kbd>E</kbd> 确认捷径</span>
           </div>
           <div class="control-legend touch-legend" aria-label="触控操作说明">
             <span><kbd>拖动</kbd> 走位</span><span><kbd>快划</kbd> 冲刺</span><span><kbd>点工具栏</kbd> 切换工具</span>
@@ -80,9 +80,13 @@
 
         <section class="incident-panel" id="incident-panel" hidden aria-label="班次事件">
           <div><strong id="incident-title"></strong><time id="incident-time"></time></div>
+          <p class="incident-direction" id="incident-direction" hidden></p>
           <p id="incident-reading" class="batch-reading" hidden></p>
           <p id="incident-detail"></p>
         </section>
+        <div class="objective-marker" id="objective-marker" hidden>
+          <span class="objective-arrow" aria-hidden="true"></span><span id="objective-label"></span>
+        </div>
         <div class="inspection-card" id="inspection-card" hidden>
           <div><strong>合规复检</strong><span id="inspection-progress">0%</span></div>
           <span id="inspection-hint">留在圈内 1.6 秒，核验并隔离本批</span>
@@ -113,7 +117,10 @@
       <div class="floating-joystick joystick" id="floating-joystick" hidden aria-hidden="true"><i id="floating-stick"></i></div>
       <div class="touch-controls" id="touch-controls" hidden>
         <div class="joystick" id="joystick" aria-label="移动摇杆"><i id="joystick-stick"></i></div>
-        <div class="touch-actions"><button type="button" id="touch-accept" disabled>拾取</button><button type="button" id="touch-dash">冲刺</button></div>
+        <div class="touch-actions">
+          <button type="button" id="touch-accept" hidden disabled>免检放行</button>
+          <button type="button" id="touch-dash">冲刺<span class="touch-dash-meter" aria-hidden="true"><i id="touch-dash-fill"></i></span></button>
+        </div>
       </div>
 
       <section class="overlay" id="upgrade-screen" aria-labelledby="upgrade-title" hidden>
