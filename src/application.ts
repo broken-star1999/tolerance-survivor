@@ -1,12 +1,12 @@
 import {
-  BOSS_HP, CALIBRATIONS, DASH_BUFFER, DASH_COOLDOWN, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS,
-  SURGES, Signal, UPGRADES,
+  BOSS_HP, BOSS_TICK, CALIBRATIONS, DASH_BUFFER, DASH_COOLDOWN, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS,
+  SHORTCUT_TICKS, SURGES, Signal, UPGRADES,
   WEAPON_IDS, WEAPON_SLOTS, advanceRun, chooseUpgrade, previewToolStats,
   createPracticeRun, createRun, hazardValue, isWeapon, nearestShortcut, nearestTool, surgeGroupAt, waveCount, waveGapDegrees, weaponCount,
   type Input, type Run,
 } from './simulation.hot.ts'
 import { createSound } from './sound.ts'
-import { LESSON_COPY, advanceLesson, createLesson, equipInLesson, type Lesson } from './lesson.ts'
+import { LESSON_COPY, LESSON_STEPS, advanceLesson, createLesson, equipInLesson, type Lesson } from './lesson.ts'
 import { createGameView } from './view.ts'
 import type { SpriteName } from './sprites.ts'
 
@@ -31,6 +31,17 @@ export function clockText(tick: number) {
   return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0')
 }
 
+const batchReadings = INCIDENTS.map(({ measurement }) => {
+  const { name, nominal, tolerance, measured, unit } = measurement
+  const spec = nominal.toFixed(2) + ' ± ' + tolerance.toFixed(2) + ' ' + unit
+  const actual = measured.toFixed(2) + ' ' + unit
+  const excess = (Math.abs(measured - nominal) - tolerance).toFixed(2)
+  return {
+    name, spec, actual, nominal: nominal.toFixed(2) + ' ' + unit,
+    summary: name + ' · 要求 ' + spec + '\n实测 ' + actual + ' · 超差 ' + excess + ' ' + unit,
+  }
+})
+
 export function createApplication() {
   const workstation = element('workstation')
   const stage = element('stage')
@@ -43,6 +54,8 @@ export function createApplication() {
   const lessonProgress = element('training-progress')
   const lessonTitle = element('training-title')
   const lessonDetail = element('training-detail')
+  const lessonReading = element('training-reading')
+  const lessonAction = element('training-action')
   const pauseButton = element<HTMLButtonElement>('pause-button')
   const soundButton = element<HTMLButtonElement>('sound-button')
   const fullButton = element<HTMLButtonElement>('full-button')
@@ -64,6 +77,7 @@ export function createApplication() {
   const incidentTitle = element('incident-title')
   const incidentTime = element('incident-time')
   const incidentDetail = element('incident-detail')
+  const incidentReading = element('incident-reading')
   const inspectionCard = element('inspection-card')
   const inspectionProgress = element('inspection-progress')
   const inspectionHint = element('inspection-hint')
@@ -84,10 +98,13 @@ export function createApplication() {
   const riskPanel = element('risk-panel')
   const riskValue = element('risk-value')
   const riskSegments = element('risk-segments').children
+  const reviewCount = element('review-count')
+  const reviewValue = element('review-value')
   const dashText = element('dash-text')
   const dashFill = element('dash-fill')
   const upgradeScreen = element('upgrade-screen')
   const upgradeLevel = element('upgrade-level')
+  const upgradeHint = element('upgrade-hint')
   const upgradeOptions = element('upgrade-options')
   const pauseScreen = element('pause-screen')
   const resumeButton = element<HTMLButtonElement>('resume-button')
@@ -98,6 +115,8 @@ export function createApplication() {
   const endTime = element('end-time')
   const endKills = element('end-kills')
   const endRisk = element('end-risk')
+  const endReviews = element('end-reviews')
+  const endImpact = element('end-impact')
   const endLog = element('end-log')
   const retryButton = element<HTMLButtonElement>('retry-button')
   const touch = element('touch-controls')
@@ -187,9 +206,11 @@ export function createApplication() {
     }
     if (run.tick >= toastUntil) toast.hidden = true
     const hazard = hazardValue(run)
-    text(riskValue, hazard + ' / 3')
+    text(riskValue, hazard + ' / ' + INCIDENTS.length)
     riskPanel.classList.toggle('risk-raised', hazard > 0)
     for (let i = 0; i < riskSegments.length; i++) riskSegments[i].classList.toggle('filled', i < hazard)
+    reviewCount.hidden = !!lesson
+    text(reviewValue, run.inspections.length + ' / ' + INCIDENTS.length)
     const boost = Math.ceil(Math.max(0, run.boostUntil - run.tick) / HZ)
     text(weaponStatus, boost > 0 ? '攻速 ×2 · ' + boost + ' 秒' : weaponCount(run) > 0 ? '自动测量' : '拾取地上的卡尺')
     const dashDelay = Math.max(0, run.player.dashReadyAt - run.tick)
@@ -200,12 +221,14 @@ export function createApplication() {
     const surge = run.phase === 'floor' ? run.surge : null
     incidentPanel.hidden = (!activeIncident && !surge) || !!lesson || run.choices.length > 0 || paused
     stage.classList.toggle('incident-active', !incidentPanel.hidden)
+    incidentReading.hidden = !activeIncident
     if (activeIncident) {
       const warning = activeIncident.stage === 'warning'
       const profile = INCIDENTS[activeIncident.slot]
       text(incidentTitle, profile.title)
       text(incidentTime, Math.ceil(((warning ? activeIncident.opensAt : activeIncident.closesAt) - run.tick) / HZ) + ' 秒')
-      text(incidentDetail, warning ? profile.detail : '黄色捷径立即处理 · 绿色复检圈需停留 1.6 秒')
+      text(incidentReading, batchReadings[activeIncident.slot].summary)
+      text(incidentDetail, warning ? profile.detail : '绿圈复检 1.6 秒 · 黄圈是捷径')
       incidentPanel.dataset.stage = activeIncident.stage
     } else if (surge) {
       const profile = SURGES[surge.slot]
@@ -225,8 +248,8 @@ export function createApplication() {
       const fraction = station.held / INSPECTION_HOLD
       text(inspectionProgress, Math.floor(fraction * 100) + '%')
       text(inspectionHint, inspectionDistance <= INSPECTION_RADIUS
-        ? '站稳，正在核验本批待检件'
-        : '圈内停留 1.6 秒，隔离本批待检件')
+        ? '正在核对原始读数，留在圈内'
+        : '留在圈内 1.6 秒，核验并隔离本批')
       meter(inspectionFill, fraction)
     }
     shortcutCard.hidden = !shortcut || !inspectionCard.hidden || hideControls
@@ -239,13 +262,18 @@ export function createApplication() {
         for (const enemy of run.enemies) if (enemy.active) remaining++
         text(shortcutBenefit, '立刻清场 · ' + remaining + ' 件零件')
       } else text(shortcutBenefit, definition.benefit)
-      text(shortcutConsequence, definition.consequence + ' · ' + definition.trace)
-      text(shortcutAction, ready ? '确认拾取' : '进入光圈后可拾取')
+      const reading = activeIncident ? batchReadings[activeIncident.slot] : null
+      const consequence = shortcut.kind === 'beautifier' && reading
+        ? '原值 ' + reading.actual + ' → 改记 ' + reading.nominal
+        : definition.trace
+      text(shortcutConsequence, consequence + ' · ' + definition.consequence)
+      text(shortcutAction, ready ? '确认' + definition.action : '进入黄圈后可操作')
     }
     const tool = nearestTool(run)
     toolCard.hidden = !tool || Boolean(run.choices.length) || paused || !!shortcut || !inspectionCard.hidden || run.phase === 'ended'
     if (tool) text(toolName, UPGRADES[tool.kind].name)
     touchAccept.disabled = !ready
+    text(touchAccept, ready ? shortcut.kind === 'pass' ? '放行' : '改写' : '拾取')
     touchDash.disabled = dashDelay > DASH_BUFFER
   }
 
@@ -277,12 +305,27 @@ export function createApplication() {
     if (!lesson) return
     const copy = LESSON_COPY[lesson.step]
     const touchDevice = matchMedia('(pointer: coarse)').matches
-    text(lessonProgress, '新手训练 ' + copy.number + ' / 5')
+    text(lessonProgress, '训练 ' + copy.number + ' / ' + LESSON_STEPS)
     text(lessonTitle, copy.title)
-    const reviewed = lesson.step === 'wave' && run?.inspections.length
-    text(lessonDetail, reviewed
-      ? '复检已隔离待检件。沿绿色箭头走进基础冲击波的安全缺口。'
-      : touchDevice ? copy.touch : copy.desktop)
+    const reviewed = Boolean(run?.inspections.length)
+    const practiceDecision = lesson.step === 'shortcut'
+    const resolved = practiceDecision && !run?.incident
+    lessonReading.hidden = !practiceDecision || resolved
+    if (!lessonReading.hidden) text(lessonReading, batchReadings[0].summary)
+    let line: string = copy.line
+    if (resolved) line = reviewed
+      ? '原始读数已经留档，超差件也隔离了。接下来练习避开冲击波。'
+      : '这批超差件已经免检放行。接下来看看它怎样影响冲击波。'
+    if (lesson.step === 'wave' && reviewed) {
+      line = '超差件已隔离。这轮只有基础冲击波，沿绿色箭头找缺口。'
+    }
+    if (lesson.step === 'equip' && run?.ranks.wrench) line = '扳手已解锁。让那颗螺栓进入攻击范围。'
+    text(lessonDetail, line)
+    const action = lesson.step === 'equip' && run?.ranks.wrench
+      ? '靠近螺栓'
+      : touchDevice ? copy.touch : copy.desktop
+    lessonAction.hidden = !action || resolved
+    text(lessonAction, action)
     const done = lesson.step === 'done'
     finishTraining.hidden = !done
     if (done) {
@@ -348,7 +391,7 @@ export function createApplication() {
     sound.play('start')
     updateGear()
     if (lesson) showLessonStep()
-    else note('接管计量站', '先走进绿色光圈拾起游标卡尺。用实测量块升级工具。', 225)
+    else note('接管计量站', '先拾取游标卡尺。三批样件送检时，留意场边的测量单。', 225)
     status()
   }
 
@@ -381,6 +424,9 @@ export function createApplication() {
     upgradeScreen.hidden = false
     touch.hidden = true
     text(upgradeLevel, '等级 ' + String(run.level).padStart(2, '0'))
+    text(upgradeHint, lesson
+      ? matchMedia('(pointer: coarse)').matches ? '点一张卡片，确认后继续训练。' : '按 1 至 3 或点击卡片，确认后继续训练。'
+      : '选定校准方案后继续值班。')
     upgradeOptions.replaceChildren()
     for (let index = 0; index < run.choices.length; index++) {
       const id = run.choices[index]
@@ -487,42 +533,60 @@ export function createApplication() {
     endScreen.hidden = false
     workstation.dataset.mode = 'ended'
     endDialog.dataset.outcome = run.outcome
-    const title = run.outcome === 'qualified' ? '验收通过' : run.outcome === 'repair' ? '生产恢复，待整改' : '事故停线'
-    const reason = run.outcome === 'qualified' ? '试验台已停止运转，本班质量记录完整。'
-      : run.outcome === 'repair' ? '试验台已停止运转。捷径留下的故障仍需补做检验和整改。'
-      : run.endCause === 'timeout' ? '应急处置时间用尽，试验台仍在运转。' : '值班员受伤退出，产线进入紧急停线。'
+    const outcomeCopy = {
+      qualified: ['验收通过', '原始读数完整留档，超差批次已隔离，试验台通过本班处置。'],
+      pending: ['设备已停，待复核', '还有批次缺少复检记录，暂缓交付，交由下一班核验。'],
+      repair: ['交付暂缓，待整改', '试验台已停。免检放行或改写记录涉及的批次，须追回复核后才能交付。'],
+      stopped: ['事故停线', run.endCause === 'timeout'
+        ? '应急时间用尽，试验台仍在运转。暂停交付，保留本班记录。'
+        : '值班员受伤退出，车间紧急停线。暂停交付，保留本班记录。'],
+    }
+    const [title, description] = outcomeCopy[run.outcome]
     text(endTitle, title)
-    text(endReason, reason)
+    text(endReason, description)
     text(endTime, clockText(run.tick))
     text(endKills, String(run.kills))
-    text(endRisk, hazardValue(run) + ' / 3')
+    text(endRisk, hazardValue(run) + ' / ' + INCIDENTS.length)
+    text(endReviews, run.inspections.length + ' / ' + INCIDENTS.length)
+    endImpact.hidden = run.tick < BOSS_TICK
+    text(endImpact, '事故冲击波 ' + waveCount(run) + ' 道/轮 · 安全缺口 ' + waveGapDegrees(run) + '°')
     endLog.replaceChildren()
 
-    const rows = [
-      ...run.accepted.map(record => ({
-        tick: record.tick, action: SHORTCUTS[record.kind].name,
-        reason: SHORTCUTS[record.kind].trace + ' · ' + SHORTCUTS[record.kind].consequence, safe: false,
-      })),
-      ...run.inspections.map(record => ({
-        tick: record.tick, action: '合规复检',
-        reason: INCIDENTS[record.slot].batch + ' · 隔离 ' + record.isolated + ' 件', safe: true,
-      })),
-    ].sort((a, b) => a.tick - b.tick)
-    if (rows.length === 0) {
+    if (!run.nextShortcut) {
       const item = document.createElement('li')
-      item.textContent = '本班质量隐患值为 0。'
+      item.textContent = '首批样件尚未送检。'
       endLog.append(item)
     }
-    for (const row of rows) {
+    for (let slot = 0; slot < run.nextShortcut; slot++) {
+      const review = run.inspections.find(entry => entry.slot === slot)
+      const shortcut = run.accepted.find(entry => entry.slot === slot)
+      const reading = batchReadings[slot]
       const item = document.createElement('li')
-      item.dataset.safe = String(row.safe)
+      item.dataset.status = review ? 'reviewed' : shortcut ? 'shortcut' : 'pending'
+      const header = document.createElement('div')
+      header.className = 'report-row'
       const time = document.createElement('time')
-      time.textContent = clockText(row.tick)
+      time.textContent = clockText(review?.tick ?? shortcut?.tick ?? SHORTCUT_TICKS[slot])
+      time.title = review || shortcut ? '处置时间' : '送检时间'
       const name = document.createElement('b')
-      name.textContent = row.action
-      const reason = document.createElement('span')
-      reason.textContent = row.reason
-      item.append(time, name, reason)
+      name.textContent = INCIDENTS[slot].batch
+      const decision = document.createElement('strong')
+      decision.textContent = review ? '复检隔离' : shortcut ? SHORTCUTS[shortcut.kind].action : '待复核'
+      header.append(time, name, decision)
+      const source = document.createElement('p')
+      source.className = 'report-reading'
+      source.textContent = reading.name + ' · 原值 ' + reading.actual + ' · 要求 ' + reading.spec
+      const consequence = document.createElement('p')
+      if (review) {
+        consequence.textContent = '原值已留档，' + (review.isolated > 0 ? '隔离剩余 ' + review.isolated + ' 件。' : '本批已无剩余待检件。')
+      } else if (shortcut) {
+        const definition = SHORTCUTS[shortcut.kind]
+        const detail = shortcut.kind === 'beautifier' ? '上报 ' + reading.nominal + '，掩盖实际读数' : definition.trace
+        consequence.textContent = detail + '。' + definition.consequence + '。'
+      } else {
+        consequence.textContent = '本批复检记录待补，交付挂起。'
+      }
+      item.append(header, source, consequence)
       endLog.append(item)
     }
     sound.setMode('quiet')
@@ -554,14 +618,15 @@ export function createApplication() {
     if (signal & Signal.surgeArrival) sound.play('hit')
     if (signal & Signal.inspection) {
       const record = run.inspections[run.inspections.length - 1]
-      note('复检完成', '隔离 ' + record.isolated + ' 件' + (record.recovery > 0 ? ' · 生命 +' + record.recovery : ' · 合规留档'), 150)
+      const recovery = record.recovery > 0 ? ' · 生命 +' + record.recovery : ''
+      note('复检完成', '原始读数已留档 · 隔离 ' + record.isolated + ' 件' + recovery, 165)
       sound.play('level')
     }
-    if (signal & Signal.incidentClosed && !lesson) note('处置窗口已结束', '继续走位处理场上零件。', 122)
+    if (signal & Signal.incidentClosed && !lesson) note('批次待复核', '本批未完成复检，暂缓交付。', 134)
     if (signal & Signal.shortcut) {
       const definition = SHORTCUTS[run.accepted[run.accepted.length - 1].kind]
       const reward = signal & Signal.clear ? '清场 ' + (run.kills - killsBefore) + ' 件' : definition.benefit
-      note(definition.name + '已使用', reward + ' · 隐患 +1', 175, true)
+      note(definition.action + '已记入本班', reward + ' · 隐患 +1', 175, true)
       sound.play(signal & Signal.clear ? 'clear' : 'accept')
     }
     if (signal & Signal.boss) {
@@ -580,12 +645,13 @@ export function createApplication() {
     if (lesson) {
       const previousStep = lesson.step
       advanceLesson(lesson, run, signal)
-      if (lesson.step !== previousStep) {
-        if (lesson.step === 'wave') {
-          toast.hidden = true
-          sound.setMode('boss')
-          sound.play('boss')
-        }
+      const changed = lesson.step !== previousStep
+      if (changed && lesson.step === 'wave') {
+        toast.hidden = true
+        sound.setMode('boss')
+        sound.play('boss')
+      }
+      if (changed || (signal & (Signal.toolPickup | Signal.inspection | Signal.shortcut))) {
         showLessonStep()
       }
     }

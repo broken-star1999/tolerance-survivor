@@ -758,6 +758,20 @@ export function createGameView(host: HTMLElement) {
       if (trainingTarget) {
         marker(trainingTarget.x, trainingTarget.z, .84 + Math.sin(run.tick / 10) * .08, MINT, .08)
         marker(trainingTarget.x, trainingTarget.z, .46, MINT, .08)
+        const { x, z } = run.player
+        const distance = Math.hypot(trainingTarget.x - x, trainingTarget.z - z)
+        if (distance > 1.3) {
+          const dx = (trainingTarget.x - x) / distance
+          const dz = (trainingTarget.z - z) / distance
+          for (let step = .86; step < distance - .62; step += .56) {
+            const tipX = x + dx * step
+            const tipZ = z + dz * step
+            for (const side of [-1, 1]) {
+              line(tipX - dx * .26 - dz * .17 * side, tipZ - dz * .26 + dx * .17 * side,
+                tipX, tipZ, .077, MINT, .079)
+            }
+          }
+        }
       }
       let targetX = aspect < 1.19 ? run.player.x * .71 : run.player.x * .20
       const targetZ = aspect < .9 ? run.player.z * .54 : run.player.z * .17

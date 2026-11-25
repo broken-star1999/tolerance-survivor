@@ -24,9 +24,18 @@ export const SURGES = [
   { tick: 180 * HZ, title: '交班前满载', detail: '两侧分批进料，留一条通往试验台的退路。', first: 16, second: 12 },
 ] as const
 export const INCIDENTS = [
-  { title: '待检件夹击', batch: '首批装配件', detail: '两侧涌入一批待检件。复检圈位于两路之间。' },
-  { title: '试验数据异常', batch: '试验数据批次', detail: '两侧出现异常数据，留意蓄力方向，沿中间通行。' },
-  { title: '交付催验', batch: '末批待验件', detail: '末批零件与异常数据同时涌入。可在交付前复检这一批。' },
+  {
+    title: '装配催料', batch: '首批装配件', detail: '装配工位在等料，待检件将从两侧入场。',
+    measurement: { name: '衬套外径', nominal: 20, tolerance: .05, measured: 20.08, unit: 'mm' },
+  },
+  {
+    title: '试验数据异常', batch: '试验数据批次', detail: '复核前发现载荷偏高，留意两侧数据屏的蓄力。',
+    measurement: { name: '试验载荷', nominal: 4, tolerance: .10, measured: 4.24, unit: 'kN' },
+  },
+  {
+    title: '交付催验', batch: '末批待验件', detail: '交班前要核对垫片厚度，末批样件将从两侧入场。',
+    measurement: { name: '垫片厚度', nominal: 2, tolerance: .03, measured: 2.07, unit: 'mm' },
+  },
 ] as const
 
 const incidentBatches: ReadonlyArray<readonly EnemyKind[]> = [
@@ -82,12 +91,14 @@ export const UPGRADES = {
 export const SHORTCUTS = {
   pass: {
     name: '免检通行证',
+    action: '免检放行',
     benefit: '清除场内小怪，保留经验掉落',
     consequence: '事故战每轮多一道冲击波',
     trace: '免检零件未经核验进入装配',
   },
   beautifier: {
     name: '数据一键美化器',
+    action: '改写记录',
     benefit: '测量速度翻倍，持续 12 秒',
     consequence: '事故冲击波缺口缩小 20°',
     trace: '美化记录掩盖了测量偏差',
@@ -158,7 +169,7 @@ export function weaponCount(run: Run) {
 export type ShortcutKind = keyof typeof SHORTCUTS
 export type EnemyKind = 'blank' | 'bolt' | 'phantom'
 export type EffectKind = 'slice' | 'hit' | 'impact' | 'dash' | 'pickup' | 'clear' | 'arrival' | 'toolPickup' | 'inspection' | WeaponId
-export type Outcome = 'qualified' | 'repair' | 'stopped'
+export type Outcome = 'qualified' | 'pending' | 'repair' | 'stopped'
 export type Input = { x: number; z: number; dash: boolean; accept: boolean }
 
 const upgradeIds = Object.keys(UPGRADES) as UpgradeId[]
@@ -317,7 +328,7 @@ export interface Run {
   shardCursor: number
   boltCursor: number
   effectCursor: number
-  accepted: { kind: ShortcutKind; tick: number }[]
+  accepted: { slot: number; kind: ShortcutKind; tick: number }[]
   passes: number
   beautifiers: number
   boss: Filing & {
@@ -1081,11 +1092,11 @@ function progressInspection(run: Run) {
 }
 
 function acceptShortcut(run: Run) {
+  const incident = run.incident
   const shortcut = nearestShortcut(run, 1.65)
-  if (!shortcut) return 0
-  shortcut.active = false
-  if (run.incident?.shortcut === shortcut) closeIncident(run)
-  run.accepted.push({ kind: shortcut.kind, tick: run.tick })
+  if (!shortcut || !incident || incident.shortcut !== shortcut) return 0
+  closeIncident(run)
+  run.accepted.push({ slot: incident.slot, kind: shortcut.kind, tick: run.tick })
   addEffect(run, 'pickup', shortcut.x, shortcut.z, 0, 0, 42)
   if (shortcut.kind === 'pass') {
     run.passes++
@@ -1260,7 +1271,9 @@ function endRun(run: Run, cause: 'health' | 'timeout' | 'boss') {
   run.boss.active = false
   run.boss.press = null
   run.choices.length = 0
-  run.outcome = cause !== 'boss' ? 'stopped' : hazardValue(run) === 0 ? 'qualified' : 'repair'
+  if (cause !== 'boss') run.outcome = 'stopped'
+  else if (hazardValue(run) > 0) run.outcome = 'repair'
+  else run.outcome = run.inspections.length === INCIDENTS.length ? 'qualified' : 'pending'
   return Signal.end
 }
 
@@ -1381,7 +1394,8 @@ export function placePracticeToolTarget(run: Run) {
   for (const shard of run.shards) shard.active = false
   run.xp = 0
   run.xpGoal = Infinity
-  run.nextAttack = run.tick + 120
+  // Keep the practice target available until the player tries the wrench.
+  run.nextAttack = Infinity
   const side = player.x > ARENA.x - 4.1 ? -1 : 1
   run.tools.push({ active: true, kind: 'wrench', ...nearestFreePoint(player.x + side * 2.2, player.z, .72) })
   spawnEnemy(run, 'bolt', player.x + side * 4.75, player.z)

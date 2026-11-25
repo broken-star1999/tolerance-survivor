@@ -33,7 +33,7 @@
         <div class="title-content">
           <div class="title-line" aria-hidden="true"><b></b><i></i><i></i><i></i></div>
           <h1 id="game-title" aria-label="公差幸存者">公差<span>幸存者</span></h1>
-          <p>拾起工训量具，守住试制产线。每次免检和数据美化，都会改变最后的事故战。</p>
+          <p>拾起工训量具，守住试制产线。图纸有公差，记录要如实。</p>
           <div class="title-actions">
             <button class="action primary" type="button" id="start-button"><span class="play-icon">▶</span>开始值班<span class="enter-hint">↵</span></button>
             <button class="action secondary" type="button" id="learn-button">操作训练</button>
@@ -65,9 +65,11 @@
           <div class="count-panel"><span id="level-text">等级 01</span><strong id="kills-text">击退 0</strong></div>
         </div>
         <section class="training-panel" id="training-panel" aria-live="polite" hidden>
-          <span id="training-progress">新手训练 1 / 5</span>
-          <strong id="training-title">走到量具标记</strong>
+          <div class="training-header"><span>计量站对讲</span><span id="training-progress">训练 1 / 6</span></div>
+          <strong id="training-title">拾起游标卡尺</strong>
+          <p id="training-reading" class="batch-reading" hidden></p>
           <p id="training-detail"></p>
+          <kbd id="training-action"></kbd>
           <button class="action primary" id="finish-training" type="button" hidden>开始正式值班</button>
         </section>
         <div class="boss-meter" id="boss-meter" hidden>
@@ -77,11 +79,12 @@
 
         <section class="incident-panel" id="incident-panel" hidden aria-label="班次事件">
           <div><strong id="incident-title"></strong><time id="incident-time"></time></div>
+          <p id="incident-reading" class="batch-reading" hidden></p>
           <p id="incident-detail"></p>
         </section>
         <div class="inspection-card" id="inspection-card" hidden>
           <div><strong>合规复检</strong><span id="inspection-progress">0%</span></div>
-          <span id="inspection-hint">圈内停留 1.6 秒，隔离本批待检件</span>
+          <span id="inspection-hint">留在圈内 1.6 秒，核验并隔离本批</span>
           <div class="meter" aria-hidden="true"><div id="inspection-fill"></div></div>
         </div>
         <div class="toast" role="status" id="toast" hidden><strong id="toast-title"></strong><span id="toast-detail"></span></div>
@@ -90,7 +93,7 @@
           <div class="shortcut-card-top"><strong id="shortcut-name"></strong><span>隐患 +1</span></div>
           <span id="shortcut-benefit"></span>
           <span id="shortcut-consequence"></span>
-          <div class="shortcut-instruction"><kbd>E</kbd> <span id="shortcut-action">确认拾取</span></div>
+          <div class="shortcut-instruction"><kbd>E</kbd> <span id="shortcut-action">确认免检放行</span></div>
         </div>
         <div class="hud-bottom">
           <div class="equipment">
@@ -100,6 +103,7 @@
           <div class="risk-panel" id="risk-panel">
             <div><span>质量隐患</span><strong id="risk-value">0 / 3</strong></div>
             <div class="risk-segments" id="risk-segments" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="review-count" id="review-count"><span>已复检</span><strong id="review-value">0 / 3</strong></div>
           </div>
           <div class="dash-panel"><div><kbd>空格</kbd><span id="dash-text">冲刺就绪</span></div><div class="meter"><div id="dash-fill"></div></div></div>
         </div>
@@ -115,7 +119,7 @@
         <div class="dialog upgrade-dialog" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
           <div class="dialog-eyebrow" id="upgrade-level">等级 02</div>
           <h2 id="upgrade-title">校准量具</h2>
-          <p class="dialog-text">选定校准方案后继续值班。</p>
+          <p class="dialog-text" id="upgrade-hint">选定校准方案后继续值班。</p>
           <div class="upgrade-options" id="upgrade-options"></div>
         </div>
       </section>
@@ -139,11 +143,13 @@
             <div><dt>坚持时间</dt><dd id="end-time"></dd></div>
             <div><dt>击退零件</dt><dd id="end-kills"></dd></div>
             <div><dt>质量隐患</dt><dd id="end-risk"></dd></div>
+            <div><dt>复检批次</dt><dd id="end-reviews"></dd></div>
           </dl>
-          <div class="report-history">
-            <h3>处置追溯</h3>
+          <p class="report-impact" id="end-impact" hidden></p>
+          <section class="report-history" aria-labelledby="report-history-title" tabindex="0">
+            <h3 id="report-history-title">处置追溯</h3>
             <ul id="end-log"></ul>
-          </div>
+          </section>
           <div class="dialog-buttons">
             <button class="action primary" id="retry-button" type="button">再值一班</button>
             <button class="action secondary" id="end-home" type="button">返回标题</button>
@@ -153,7 +159,7 @@
     </section>
 
     <footer class="station-foot" aria-label="游戏目标">
-      <span><strong>任务</strong> 守住车间，击败失稳试验台</span>
+      <span><strong>任务</strong> 核验三批样件，击停失稳试验台</span>
       <span class="keyboard-tip"><kbd>ESC</kbd> 暂停</span>
     </footer>
   </main>

@@ -1,17 +1,40 @@
 import {
-  Signal, beginPracticeWave, placePracticePass, placePracticeSamples, placePracticeToolTarget,
+  Signal, beginPracticeWave, placePracticePass, placePracticeSamples, placePracticeToolTarget, waveCount,
   type Run,
 } from './simulation.hot.ts'
 
 export const LESSON_COPY = {
-  walk: { number: 1, title: '拾起游标卡尺', desktop: '用 WASD 或方向键移动，走进绿色光圈，拾起 Lv.1 卡尺。', touch: '按住场地拖动，走进绿色光圈拾起 Lv.1 卡尺。' },
-  dash: { number: 2, title: '练习冲刺', desktop: '按空格冲刺。工位需要绕行。右下角进度条填满后可再次冲刺。', touch: '快速划动场地或点「冲刺」。工位需要绕行。进度条填满后可再次冲刺。' },
-  collect: { number: 3, title: '测量与升级', desktop: '卡尺会自动打向附近样件。走近蓝色量块，量块集齐后选一张升级卡，强化已经捡到的卡尺。', touch: '卡尺会自动打向附近样件。走近蓝色量块，量块集齐后选一张升级卡，强化已经捡到的卡尺。' },
-  equip: { number: 3, title: '试用新工具', desktop: '拾起绿色光圈里的扳手，看看它怎样重击样件。工具在拾取后从 Lv.1 开始，最高 Lv.5。', touch: '拾起绿色光圈里的扳手，看看它怎样重击样件。工具在拾取后从 Lv.1 开始，最高 Lv.5。' },
-  shortcut: { number: 4, title: '看看免检的代价', desktop: '黄色光圈按 E 免检，立即清场并增加隐患。也可在绿色复检圈停留 1.6 秒。', touch: '黄色光圈点「拾取」免检，立即清场并增加隐患。也可在绿色复检圈停留 1.6 秒。' },
-  wave: { number: 5, title: '从缺口躲开冲击波', desktop: '免检件进入装配后失效，试验台会多放一道冲击波。沿绿色箭头进入缺口。', touch: '免检件进入装配后失效，试验台会多放一道冲击波。沿绿色箭头进入缺口。' },
-  done: { number: 5, title: '训练完成', desktop: '正式值班从 0 点隐患开始。拾取前先看收益和后果，也可以绕开捷径。', touch: '正式值班从 0 点隐患开始。拾取前先看收益和后果，也可以绕开捷径。' },
+  walk: {
+    number: 1, title: '拾起游标卡尺', line: '先拿量具。看地上的箭头，走进绿圈。',
+    desktop: 'WASD 或方向键', touch: '按住场地拖动',
+  },
+  dash: {
+    number: 2, title: '练习冲刺', line: '试一次冲刺。右下角进度条回满就能再用。',
+    desktop: '空格', touch: '快划场地或点「冲刺」',
+  },
+  collect: {
+    number: 3, title: '测量与升级', line: '卡尺会自动出手。收集掉落的实测量块，就能选卡升级。',
+    desktop: '走近实测量块', touch: '走近实测量块',
+  },
+  equip: {
+    number: 4, title: '试用新工具', line: '拿上扳手，靠近螺栓，试一次近身重击。',
+    desktop: '走进扳手的绿圈', touch: '走进扳手的绿圈',
+  },
+  shortcut: {
+    number: 5, title: '处置超差样件', line: '这批赶着装配。绿圈复检要留 1.6 秒，免检能救急，但会放进超差件。',
+    desktop: '绿圈复检 · 黄圈按 E', touch: '绿圈复检 · 黄圈点「放行」',
+  },
+  wave: {
+    number: 6, title: '从缺口躲开冲击波', line: '免检件进入装配。沿绿色箭头找缺口，躲过这一轮的两道波。',
+    desktop: '沿地面绿箭头走', touch: '沿地面绿箭头走',
+  },
+  done: {
+    number: 6, title: '训练完成', line: '正式值班要核验三批样件。复检、放行和待复核都会写进交班报告。',
+    desktop: '', touch: '',
+  },
 } as const
+
+export const LESSON_STEPS = LESSON_COPY.done.number
 
 type LessonStep = keyof typeof LESSON_COPY
 export type Lesson = { step: LessonStep; waitUntil: number; demonstrated: boolean; marker: { x: number; z: number } | null }
@@ -23,6 +46,8 @@ export function createLesson(): Lesson {
 export function equipInLesson(lesson: Lesson, run: Run) {
   if (lesson.step !== 'collect') return
   placePracticeToolTarget(run)
+  const tool = run.tools[run.tools.length - 1]
+  lesson.marker = { x: tool.x, z: tool.z }
   lesson.step = 'equip'
 }
 
@@ -34,6 +59,7 @@ export function advanceLesson(lesson: Lesson, run: Run, signal: number) {
     placePracticeSamples(run)
     lesson.step = 'collect'
   } else if (lesson.step === 'equip') {
+    if ((signal & Signal.toolPickup) && run.lastToolPicked === 'wrench') lesson.marker = null
     if (!lesson.demonstrated && run.effects.some(effect => effect.from === run.tick &&
         (effect.kind === 'wrench' || effect.kind === 'file' || effect.kind === 'saw' || effect.kind === 'tape' || effect.kind === 'mallet'))) {
       lesson.demonstrated = true
@@ -41,6 +67,7 @@ export function advanceLesson(lesson: Lesson, run: Run, signal: number) {
     }
     if (lesson.demonstrated && run.tick >= lesson.waitUntil) {
       placePracticePass(run)
+      lesson.marker = null
       lesson.step = 'shortcut'
     }
   } else if (lesson.step === 'shortcut') {
@@ -52,7 +79,7 @@ export function advanceLesson(lesson: Lesson, run: Run, signal: number) {
       beginPracticeWave(run)
       lesson.step = 'wave'
     }
-  } else if (lesson.step === 'wave' && run.waves.some(wave => wave.active && wave.crossedSafely)) {
+  } else if (lesson.step === 'wave' && run.waves.filter(wave => wave.crossedSafely).length >= waveCount(run)) {
     lesson.step = 'done'
   }
 }

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
 import {
   BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
-  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
+  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
   type Run,
 } from '../src/simulation.hot.ts'
 import { pickTestUpgrade, testInput } from './play-policy.ts'
@@ -41,6 +41,7 @@ function play(seed: number, takeShortcuts: boolean) {
     hp: run.player.hp,
     kills: run.kills,
     accepted: run.accepted,
+    reviewed: run.inspections.map(record => record.slot),
     firstUpgrade,
     waveSets: run.boss.waveSets,
   }
@@ -80,6 +81,7 @@ test('the pass clears all active enemies, retains XP and records a single hazard
   assert.equal(run.inspections.length, 0)
   advanceRun(run, accept)
   assert.equal(run.accepted.length, 1)
+  assert.equal(run.accepted[0].slot, 0)
 })
 
 test('beautification boost expires exactly after twelve seconds and narrows the later safe gap', () => {
@@ -101,6 +103,7 @@ test('beautification boost expires exactly after twelve seconds and narrows the 
   assert.equal(attackInterval(run), baseline)
   assert.equal(waveGapDegrees(run), 80)
   assert.equal(hazardValue(run), 1)
+  assert.equal(run.accepted[0].slot, 1)
 })
 
 test('the three shortcuts alter width and cadence while every actual wave keeps a 0.9 second warning', () => {
@@ -134,6 +137,7 @@ test('clean and three-hazard runs can both win, including a deterministic input 
   const risky = play(seed, true)
   assert.equal(clean.outcome, 'qualified', JSON.stringify(clean))
   assert.equal(clean.accepted.length, 0)
+  assert.deepEqual(clean.reviewed, [0, 1, 2])
   assert.equal(risky.outcome, 'repair', JSON.stringify(risky))
   assert.equal(risky.accepted.length, 3)
   assert.ok(risky.waveSets > 1)
@@ -239,6 +243,25 @@ test('first batch is marked before the choice and supplies a real group for insp
   assert.ok(run.incident?.shortcut.active)
 })
 
+test('pausing to read a lesson leaves its wrench practice target available', () => {
+  const run = createPracticeRun()
+  run.ranks.caliper = 1
+  run.tools[0].active = false
+  placePracticeToolTarget(run)
+  const bolt = run.enemies.find(enemy => enemy.active)!
+  for (let i = 0; i < 12 * HZ; i++) advanceRun(run, IDLE_INPUT)
+  assert.equal(bolt.active, true)
+  const wrench = nearestTool(run, 10)!
+  assert.equal(wrench.kind, 'wrench')
+  run.player.x = wrench.x
+  run.player.z = wrench.z
+  advanceRun(run, IDLE_INPUT)
+  const x = bolt.x - run.player.x
+  const z = bolt.z - run.player.z
+  for (let i = 0; i < HZ; i++) advanceRun(run, { x, z, dash: false, accept: false })
+  assert.ok(run.effects.some(effect => effect.kind === 'wrench'))
+})
+
 test('inspection requires staying put, isolates only its batch and closes the shortcut', () => {
   const run = createRun(33)
   run.nextAttack = Infinity
@@ -278,6 +301,31 @@ test('an unused incident expires without logging a decision or removing its part
   assert.equal(run.inspections.length, 0)
   assert.equal(hazardValue(run), 0)
   assert.ok(run.enemies.some(enemy => enemy.active && enemy.batch === 0))
+})
+
+test('a missed inspection prevents release even after the test rig is stopped with zero hazards', () => {
+  const run = createRun(95)
+  emptyFloor(run)
+  run.nextAttack = Infinity
+  run.player.protectedUntil = Infinity
+  getShortcut(run, 0)
+  run.tick = run.incident!.closesAt - 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.incidentClosed)
+  for (const slot of [1, 2]) {
+    getShortcut(run, slot)
+    const { x, z } = run.incident!.inspection
+    run.player.x = x
+    run.player.z = z
+    for (let i = 0; i < INSPECTION_HOLD - 1; i++) advanceRun(run, IDLE_INPUT)
+    assert.ok(advanceRun(run, IDLE_INPUT) & Signal.inspection)
+  }
+  run.tick = BOSS_TICK - 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.boss)
+  run.boss.hp = 0
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.end)
+  assert.equal(hazardValue(run), 0)
+  assert.deepEqual(run.inspections.map(record => record.slot), [1, 2])
+  assert.equal(run.outcome, 'pending')
 })
 
 test('the calibrated file delivers the higher previewed damage in four strokes', () => {
