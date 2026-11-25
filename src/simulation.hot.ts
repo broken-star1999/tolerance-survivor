@@ -1,5 +1,5 @@
 import { createCrowd, detourTowardPlayer, indexCrowd, spacing, type Crowd } from './enemy-crowd.ts'
-import { ARENA, PLAYER_CLEARANCE, isOpenFloor, moveOnFloor, nearestFreePoint, stationContact } from './floor-plan.ts'
+import { ARENA, PLAYER_CLEARANCE, isOpenFloor, moveOnFloor, nearestFreePoint, stationContact, type GroundPoint } from './floor-plan.ts'
 
 export { ARENA } from './floor-plan.ts'
 
@@ -16,9 +16,14 @@ export const DASH_COOLDOWN = 72
 export const DASH_BUFFER = 8
 const DASH_TICKS = 13
 const DASH_SPEED = 15
+const DASH_STEP = DASH_SPEED / HZ
 const FILE_STROKE_GAP = 8
 const SURGE_WARNING = 105
 const PRESS_WARNING = 68
+const PATROL_SPAWN_DISTANCE = 6.1
+const FORMATION_DISTANCE = 5.45
+const MARKED_SPAWN_DISTANCE = 3.8
+const INCOMING_CLEARANCE = .68
 export const SURGES = [
   { tick: 32 * HZ, title: '上料尖峰', detail: '整列超差件从一侧入场，沿空出来的一侧绕行。', first: 9, second: 4 },
   { tick: 122 * HZ, title: '复测积压', detail: '两批零件轮番压近，留意后到的远程干扰。', first: 12, second: 9 },
@@ -403,8 +408,8 @@ export function createRun(seed = 0x41c603a1): Run {
   }
 
   for (let i = 0; i < 7; i++) {
-    const angle = i * TAU / 7 + 0.14 * random(run)
-    const distance = 3.25 + random(run) * 1.3
+    const angle = (i + 1) * TAU / 8 + 0.14 * random(run)
+    const distance = 5.40 + random(run) * .85
     spawnEnemy(run, 'blank', Math.cos(angle) * distance, run.player.z + Math.sin(angle) * distance)
   }
   return run
@@ -435,7 +440,10 @@ export function angleDistance(a: number, b: number) {
   return Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)))
 }
 
-function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1) {
+function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1, minimumDistance = 0) {
+  const radius = kind === 'bolt' ? .53 : .40
+  const origin = nearestFreePoint(x, z, radius)
+  if (minimumDistance > 0 && Math.hypot(origin.x - run.player.x, origin.z - run.player.z) < minimumDistance) return
   const enemies = run.enemies
   for (let i = 0; i < enemies.length; i++) {
     const index = (run.enemyCursor + i) % enemies.length
@@ -445,8 +453,7 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1)
     enemy.active = true
     enemy.kind = kind
     enemy.batch = batch
-    enemy.radius = kind === 'bolt' ? 0.53 : 0.40
-    const origin = nearestFreePoint(x, z, enemy.radius)
+    enemy.radius = radius
     enemy.x = origin.x
     enemy.z = origin.z
     enemy.hp = kind === 'bolt' ? 46 + 16 * time : kind === 'phantom' ? 27 + 12 * time : 16 + 8 * time
@@ -475,18 +482,27 @@ function spawnPatrol(run: Run) {
     const kind: EnemyKind = time > 87 && roll < 0.16
       ? 'phantom'
       : time > 43 && roll < (time > 87 ? 0.34 : 0.26) ? 'bolt' : 'blank'
-    let x = 0
-    let z = 0
-    for (let tries = 0; tries < 4; tries++) {
-      const angle = random(run) * TAU
-      const spread = 5.3 + random(run) * (time < 35 ? 2 : 5.2)
-      x = clamp(run.player.x + Math.cos(angle) * spread, -ARENA.x + 0.4, ARENA.x - 0.4)
-      z = clamp(run.player.z + Math.sin(angle) * spread, -ARENA.z + 0.4, ARENA.z - 0.4)
-      if (Math.hypot(x - run.player.x, z - run.player.z) > 3.9) break
-    }
-    spawnEnemy(run, kind, x, z)
+    const heading = random(run) * TAU
+    const spread = PATROL_SPAWN_DISTANCE + random(run) * (time < 35 ? 2 : 4.6)
+    const point = patrolPoint(run.player, heading, spread)
+    spawnEnemy(run, kind, point.x, point.z)
   }
   run.nextSpawn = run.tick + Math.max(47, Math.round(104 - time * 0.29 + random(run) * 18))
+}
+
+function patrolPoint(player: GroundPoint, heading: number, spread: number) {
+  // Near a corner, the shorter ring lets the wave keep its count without closing in on the player.
+  for (const distance of [spread, PATROL_SPAWN_DISTANCE]) {
+    for (let turn = 0; turn < 8; turn++) {
+      const angle = heading + turn * TAU / 8
+      const x = player.x + Math.cos(angle) * distance
+      const z = player.z + Math.sin(angle) * distance
+      if (isOpenFloor(x, z, INCOMING_CLEARANCE)) return { x, z }
+    }
+  }
+  const farX = ARENA.x - INCOMING_CLEARANCE
+  const z = clamp(player.z, -ARENA.z + INCOMING_CLEARANCE, ARENA.z - INCOMING_CLEARANCE)
+  return { x: player.x < 0 ? farX : -farX, z }
 }
 
 const SURGE_GAP = 53
@@ -495,24 +511,49 @@ export function surgeGroupAt(surge: Surge, group: number): number {
   return surge.opensAt + group * SURGE_GAP
 }
 
+function formationPoint(player: GroundPoint, x: number, z: number, placed: readonly GroundPoint[]) {
+  const origin = nearestFreePoint(x, z, INCOMING_CLEARANCE)
+  const available = (px: number, pz: number) =>
+    Math.hypot(px - player.x, pz - player.z) >= FORMATION_DISTANCE &&
+    placed.every(part => Math.hypot(px - part.x, pz - part.z) >= .82)
+  if (available(origin.x, origin.z)) return origin
+
+  // Preserve the formation locally when a bench or wall takes up its planned point.
+  const heading = Math.atan2(origin.z - player.z, origin.x - player.x)
+  for (let radius = 1.1; radius <= 6.61; radius += 1.1) {
+    for (let turn = 0; turn < 12; turn++) {
+      const bearing = heading + turn * TAU / 12
+      const px = origin.x + Math.cos(bearing) * radius
+      const pz = origin.z + Math.sin(bearing) * radius
+      if (isOpenFloor(px, pz, INCOMING_CLEARANCE) && available(px, pz)) return { x: px, z: pz }
+    }
+  }
+  return null
+}
+
 function prepareSurge(run: Run, slot: number): Surge {
   const profile = SURGES[slot]
   const { player } = run
   const seededSide = ((run.seed >>> slot) & 1) === 1 ? 1 : -1
   const leadSide = Math.abs(player.x) > 5.1 ? -Math.sign(player.x) : seededSide
   const groups = [profile.first, profile.second].map((count, group) => {
-    const side = group === 0 || slot === 0 ? leadSide : -leadSide
+    const preferred = group === 0 || slot === 0 ? leadSide : -leadSide
+    const room = ARENA.x - INCOMING_CLEARANCE - preferred * player.x
+    const side = room >= FORMATION_DISTANCE ? preferred : -preferred
     const centerZ = clamp(player.z, -3.5, 3.5)
-    return Array.from({ length: count }, (_, index): IncomingPart => {
+    const parts: IncomingPart[] = []
+    for (let index = 0; index < count; index++) {
       const row = Math.floor(index / 8)
       const width = Math.min(8, count - row * 8)
       const line = (index % 8 - (width - 1) * .5) * 1.12
       const z = centerZ + line + (group ? .74 * side : 0)
-      const x = player.x + side * (5.8 + .97 * row + group * .92)
+      const x = player.x + side * (6.5 + .97 * row + group * .92)
       const kind = slot > 0 && group === 1 && index % 3 === 0 ? 'phantom'
         : slot > 0 && index % (slot === 2 ? 3 : 5) === 0 ? 'bolt' : 'blank'
-      return { kind, ...nearestFreePoint(x, z, .68) }
-    })
+      const point = formationPoint(player, x, z, parts)
+      if (point) parts.push({ kind, ...point })
+    }
+    return parts
   })
   return { slot, groups, opensAt: profile.tick, issued: 0 }
 }
@@ -527,7 +568,7 @@ function advanceSurges(run: Run) {
   const surge = run.surge
   if (!surge) return signal
   while (surge.issued < surge.groups.length && run.tick >= surgeGroupAt(surge, surge.issued)) {
-    for (const part of surge.groups[surge.issued]) spawnEnemy(run, part.kind, part.x, part.z)
+    for (const part of surge.groups[surge.issued]) spawnEnemy(run, part.kind, part.x, part.z, -1, MARKED_SPAWN_DISTANCE)
     surge.issued++
     signal |= Signal.surgeArrival
   }
@@ -725,6 +766,37 @@ function attack(run: Run) {
   return signal
 }
 
+function startDash(run: Run) {
+  const { player, tick } = run
+  const limitX = ARENA.x - PLAYER_CLEARANCE
+  const limitZ = ARENA.z - PLAYER_CLEARANCE
+  // At a wall, the outward part of a diagonal input cannot contribute to the dash.
+  const outwardX = Math.abs(player.x) >= limitX && player.x * player.dx > 0
+  const outwardZ = Math.abs(player.z) >= limitZ && player.z * player.dz > 0
+  const x = outwardX ? 0 : player.dx
+  const z = outwardZ ? 0 : player.dz
+  const length = Math.hypot(x, z)
+  if (length < .01) return 0
+
+  const dx = x / length
+  const dz = z / length
+  const edgeX = dx === 0 ? Infinity : (Math.sign(dx) * limitX - player.x) / dx
+  const edgeZ = dz === 0 ? Infinity : (Math.sign(dz) * limitZ - player.z) / dz
+  const reach = Math.min(DASH_STEP * DASH_TICKS, edgeX, edgeZ)
+  if (reach < DASH_STEP) return 0
+  const contact = stationContact(player.x, player.z, player.x + dx * reach, player.z + dz * reach, PLAYER_CLEARANCE)
+  const travel = reach * contact
+  if (travel < DASH_STEP) return 0
+
+  player.dashX = dx
+  player.dashZ = dz
+  player.dashUntil = tick + DASH_TICKS
+  player.dashReadyAt = tick + DASH_COOLDOWN
+  player.protectedUntil = Math.max(tick + 16, player.protectedUntil)
+  addEffect(run, 'dash', player.x, player.z, player.x + dx * travel, player.z + dz * travel, 16)
+  return Signal.dash
+}
+
 function movePlayer(run: Run, input: Input) {
   const player = run.player
   const magnitude = Math.hypot(input.x, input.z)
@@ -738,32 +810,24 @@ function movePlayer(run: Run, input: Input) {
   }
   if (input.dash && player.dashReadyAt - run.tick <= DASH_BUFFER) player.dashBufferedUntil = run.tick + DASH_BUFFER
   if (run.tick <= player.dashBufferedUntil && run.tick >= player.dashReadyAt) {
-    const length = Math.hypot(player.dx, player.dz) || 1
-    player.dashX = player.dx / length
-    player.dashZ = player.dz / length
-    player.dashUntil = run.tick + DASH_TICKS
-    player.dashReadyAt = run.tick + DASH_COOLDOWN
     player.dashBufferedUntil = -1
-    player.protectedUntil = Math.max(run.tick + 16, player.protectedUntil)
-    const distance = DASH_SPEED * DASH_TICKS / HZ
-    const toX = clamp(player.x + player.dashX * distance, -ARENA.x, ARENA.x)
-    const toZ = clamp(player.z + player.dashZ * distance, -ARENA.z, ARENA.z)
-    const travel = stationContact(player.x, player.z, toX, toZ, PLAYER_CLEARANCE)
-    addEffect(run, 'dash', player.x, player.z, player.x + (toX - player.x) * travel, player.z + (toZ - player.z) * travel, 16)
-    signaled = Signal.dash
+    signaled = startDash(run)
   }
   const dashing = run.tick < player.dashUntil
   const walkSpeed = 4.9 + run.ranks.stride * 0.49
   const speed = dashing ? DASH_SPEED : walkSpeed
   const beforeX = player.x
   const beforeZ = player.z
-  moveOnFloor(player, (dashing ? player.dashX : moveX) * speed / HZ, (dashing ? player.dashZ : moveZ) * speed / HZ, PLAYER_CLEARANCE)
+  const blocked = moveOnFloor(player, (dashing ? player.dashX : moveX) * speed / HZ,
+    (dashing ? player.dashZ : moveZ) * speed / HZ, PLAYER_CLEARANCE)
   player.moving = Math.abs(player.x - beforeX) + Math.abs(player.z - beforeZ) > .003
-  if (dashing && !player.moving) {
+  if (dashing && blocked) {
     player.dashUntil = run.tick
     addEffect(run, 'impact', player.x, player.z, 0, 0, 13)
-    moveOnFloor(player, moveX * walkSpeed / HZ, moveZ * walkSpeed / HZ, PLAYER_CLEARANCE)
-    player.moving = Math.abs(player.x - beforeX) + Math.abs(player.z - beforeZ) > .003
+    if (!player.moving) {
+      moveOnFloor(player, moveX * walkSpeed / HZ, moveZ * walkSpeed / HZ, PLAYER_CLEARANCE)
+      player.moving = Math.abs(player.x - beforeX) + Math.abs(player.z - beforeZ) > .003
+    }
   }
   return signaled
 }
@@ -1027,11 +1091,9 @@ function prepareIncident(run: Run, slot: number) {
     const side = i % 2 === 0 ? 1 : -1
     const row = Math.floor(i / 14)
     const front = (Math.floor(i / 2) % 7 - 3) * 1.10
-    const flank = (4.55 + row * 1.16 + random(run) * .40) * side
-    parts.push({
-      kind: composition[i],
-      ...nearestFreePoint(x + dx * front + sideX * flank, z + dz * front + sideZ * flank, .62),
-    })
+    const flank = (5.65 + row * 1.16 + random(run) * .40) * side
+    const point = formationPoint(player, x + dx * front + sideX * flank, z + dz * front + sideZ * flank, parts)
+    if (point) parts.push({ kind: composition[i], ...point })
   }
   const offer = nearestFreePoint(x + dx * .80, z + dz * .80, .66)
   const review = nearestFreePoint(x + dx * 5.15, z + dz * 5.15, INSPECTION_RADIUS + .08)
@@ -1051,7 +1113,7 @@ function openIncident(run: Run, incident: Incident) {
   incident.shortcut.active = true
   run.shortcuts.push(incident.shortcut)
   for (const part of incident.parts) {
-    spawnEnemy(run, part.kind, part.x, part.z, incident.slot)
+    spawnEnemy(run, part.kind, part.x, part.z, incident.slot, MARKED_SPAWN_DISTANCE)
   }
   run.nextShortcut++
 }
@@ -1215,7 +1277,7 @@ function scheduleWaves(run: Run) {
   if (boss.waveSets % 3 === 0) {
     for (let i = 0; i < 4; i++) {
       const angle = i * TAU / 4 + random(run) * 0.8
-      spawnEnemy(run, 'blank', boss.x + Math.cos(angle) * 7.1, boss.z + Math.sin(angle) * 7.1)
+      spawnEnemy(run, 'blank', boss.x + Math.cos(angle) * 7.1, boss.z + Math.sin(angle) * 7.1, -1, PATROL_SPAWN_DISTANCE)
     }
   }
 }

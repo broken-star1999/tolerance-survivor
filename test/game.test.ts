@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
+import { ARENA, PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
 import {
   BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
   chooseUpgrade, createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
@@ -389,6 +389,41 @@ test('a workstation stops a dash and lets a diagonal move slide along its face',
   assert.ok(isOpenFloor(run.player.x, run.player.z, PLAYER_CLEARANCE))
 })
 
+test('at every map edge and corner, an outward dash leaves the inward dash ready', () => {
+  for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    const run = createRun(19)
+    emptyFloor(run)
+    run.player.x = x * (ARENA.x - PLAYER_CLEARANCE)
+    run.player.z = z * (ARENA.z - PLAYER_CLEARANCE)
+    const before = { x: run.player.x, z: run.player.z }
+    assert.equal(advanceRun(run, { x, z, dash: true, accept: false }) & Signal.dash, 0)
+    assert.equal(run.player.dashReadyAt, 0)
+    assert.ok(isOpenFloor(run.player.x, run.player.z, PLAYER_CLEARANCE))
+    assert.ok(Math.hypot(run.player.x - before.x, run.player.z - before.z) < 1e-9)
+    assert.ok(advanceRun(run, { x: -x, z: -z, dash: true, accept: false }) & Signal.dash)
+    assert.ok(Math.hypot(run.player.x - before.x, run.player.z - before.z) > .24)
+  }
+})
+
+test('diagonal contact with an outer wall hands control back before the next move', () => {
+  const run = createRun(19)
+  emptyFloor(run)
+  const edge = ARENA.x - PLAYER_CLEARANCE
+  run.player.x = edge - .39
+  run.player.z = 0
+  const diagonal = { x: 1, z: 1, dash: false, accept: false }
+  assert.ok(advanceRun(run, { ...diagonal, dash: true }) & Signal.dash)
+  advanceRun(run, diagonal)
+  advanceRun(run, diagonal)
+  assert.equal(run.player.x, edge)
+  assert.equal(run.player.dashUntil, run.tick)
+  const zAtWall = run.player.z
+  advanceRun(run, diagonal)
+  assert.ok(run.player.z > zAtWall)
+  advanceRun(run, { ...IDLE_INPUT, x: -1 })
+  assert.ok(run.player.x < edge - .075)
+})
+
 test('separated chasers route around a bench from a blocked approach', () => {
   const run = createRun(74)
   const bench = STATIONS[1]
@@ -468,6 +503,51 @@ test('a surge telegraphs two separate groups and leaves a brief opening afterwar
   assert.equal(run.enemies.filter(enemy => enemy.active).length, SURGES[0].first + SURGES[0].second)
   while (run.surge) advanceRun(run, IDLE_INPUT)
   assert.ok(run.nextSpawn > run.tick + HZ)
+})
+
+test('new patrols keep their distance at the four corners', () => {
+  for (const x of [-1, 1]) {
+    for (const z of [-1, 1]) {
+      for (const seed of [32, 44, 91, 123, 464]) {
+        const run = createRun(seed)
+        emptyFloor(run)
+        run.player.x = x * (ARENA.x - PLAYER_CLEARANCE)
+        run.player.z = z * (ARENA.z - PLAYER_CLEARANCE)
+        run.nextShortcut = SHORTCUT_TICKS.length
+        run.tick = 171 * HZ - 1
+        run.nextSpawn = run.tick + 1
+        advanceRun(run, IDLE_INPUT)
+        const patrol = run.enemies.filter(enemy => enemy.active)
+        assert.equal(patrol.length, 4)
+        assert.ok(patrol.every(enemy => Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 6))
+        assert.ok(patrol.every(enemy => isOpenFloor(enemy.x, enemy.z, enemy.radius)))
+      }
+    }
+  }
+})
+
+test('a warned formation avoids spawning at a mark the player has run to', () => {
+  for (const useSurge of [true, false]) {
+    const run = createRun(464)
+    emptyFloor(run)
+    run.nextSurge = useSurge ? 2 : SURGES.length
+    run.nextShortcut = useSurge ? SHORTCUT_TICKS.length : 0
+    run.player.x = ARENA.x - PLAYER_CLEARANCE
+    run.player.z = -ARENA.z + PLAYER_CLEARANCE
+    run.tick = useSurge ? SURGES[2].tick - 106 : SHORTCUT_TICKS[0] - 2 * HZ - 1
+    advanceRun(run, IDLE_INPUT)
+    const incoming = useSurge ? run.surge!.groups[0] : run.incident!.parts
+    assert.ok(incoming.every(part => Math.hypot(part.x - run.player.x, part.z - run.player.z) >= 5.4))
+    assert.ok(incoming.every((part, index) => incoming.slice(0, index).every(other =>
+      Math.hypot(part.x - other.x, part.z - other.z) >= .8)))
+    run.player.x = incoming[0].x
+    run.player.z = incoming[0].z
+    run.tick = (useSurge ? run.surge!.opensAt : run.incident!.opensAt) - 1
+    advanceRun(run, IDLE_INPUT)
+    const spawned = run.enemies.filter(enemy => enemy.active)
+    assert.ok(spawned.length > 0 && spawned.length < incoming.length)
+    assert.ok(spawned.every(enemy => Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 3.73))
+  }
 })
 
 test('the pressure head locks its ground zone and deals damage only at the indicated strike', () => {

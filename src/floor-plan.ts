@@ -15,7 +15,7 @@ function clamp(value: number, low: number, high: number): number {
 }
 
 export function isOpenFloor(x: number, z: number, clearance = 0): boolean {
-  return Math.abs(x) <= ARENA.x && Math.abs(z) <= ARENA.z &&
+  return Math.abs(x) <= ARENA.x - clearance && Math.abs(z) <= ARENA.z - clearance &&
     !STATIONS.some(station => Math.abs(x - station.x) < station.width / 2 + clearance &&
       Math.abs(z - station.z) < station.depth / 2 + clearance)
 }
@@ -69,8 +69,8 @@ export function moveOnFloor(body: GroundPoint, dx: number, dz: number, clearance
   if (!dx && !dz) return false
   const x = body.x
   const z = body.z
-  const toX = clamp(x + dx, -ARENA.x, ARENA.x)
-  const toZ = clamp(z + dz, -ARENA.z, ARENA.z)
+  const toX = clamp(x + dx, -ARENA.x + clearance, ARENA.x - clearance)
+  const toZ = clamp(z + dz, -ARENA.z + clearance, ARENA.z - clearance)
   if (stationContact(x, z, toX, toZ, clearance) === 1) {
     body.x = toX
     body.z = toZ
