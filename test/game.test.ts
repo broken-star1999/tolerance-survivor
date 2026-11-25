@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ARENA, PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
+import { ARENA, PLAYER_CLEARANCE, STATIONS, isOpenFloor, type GroundPoint } from '../src/floor-plan.ts'
 import {
   BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
   chooseUpgrade, createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
@@ -505,9 +505,13 @@ test('a surge telegraphs two separate groups and leaves a brief opening afterwar
   assert.ok(run.nextSpawn > run.tick + HZ)
 })
 
-test('new patrols keep their distance at the four corners', () => {
-  for (const x of [-1, 1]) {
-    for (const z of [-1, 1]) {
+function isNearArenaWall(point: GroundPoint) {
+  return Math.min(ARENA.x - Math.abs(point.x), ARENA.z - Math.abs(point.z)) <= 2.2
+}
+
+test('patrols enter far away from the perimeter around the entire workshop', () => {
+  for (const x of [-1, 0, 1]) {
+    for (const z of [-1, 0, 1]) {
       for (const seed of [32, 44, 91, 123, 464]) {
         const run = createRun(seed)
         emptyFloor(run)
@@ -519,14 +523,34 @@ test('new patrols keep their distance at the four corners', () => {
         advanceRun(run, IDLE_INPUT)
         const patrol = run.enemies.filter(enemy => enemy.active)
         assert.equal(patrol.length, 4)
-        assert.ok(patrol.every(enemy => Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 6))
-        assert.ok(patrol.every(enemy => isOpenFloor(enemy.x, enemy.z, enemy.radius)))
+        assert.ok(patrol.every(enemy => Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 11.4))
+        assert.ok(patrol.every(enemy => isNearArenaWall(enemy) && isOpenFloor(enemy.x, enemy.z, enemy.radius)))
       }
     }
   }
 })
 
-test('a warned formation avoids spawning at a mark the player has run to', () => {
+test('opening enemies and boss reinforcements also start at distant entrances', () => {
+  const run = createRun(19)
+  const opening = run.enemies.filter(enemy => enemy.active)
+  assert.equal(opening.length, 7)
+  assert.ok(opening.every(enemy => isNearArenaWall(enemy) && Math.hypot(enemy.x, enemy.z - run.player.z) >= 12))
+
+  emptyFloor(run)
+  run.tick = BOSS_TICK - 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.boss)
+  run.player.x = ARENA.x - PLAYER_CLEARANCE
+  run.player.z = ARENA.z - PLAYER_CLEARANCE
+  run.boss.waveSets = 2
+  run.boss.pressAfterSet = 2
+  run.boss.nextWave = run.tick + 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.wave)
+  const reinforcements = run.enemies.filter(enemy => enemy.active)
+  assert.equal(reinforcements.length, 4)
+  assert.ok(reinforcements.every(enemy => isNearArenaWall(enemy) && Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 11.5))
+})
+
+test('a warned formation moves its close markers and keeps its full count', () => {
   for (const useSurge of [true, false]) {
     const run = createRun(464)
     emptyFloor(run)
@@ -537,16 +561,20 @@ test('a warned formation avoids spawning at a mark the player has run to', () =>
     run.tick = useSurge ? SURGES[2].tick - 106 : SHORTCUT_TICKS[0] - 2 * HZ - 1
     advanceRun(run, IDLE_INPUT)
     const incoming = useSurge ? run.surge!.groups[0] : run.incident!.parts
-    assert.ok(incoming.every(part => Math.hypot(part.x - run.player.x, part.z - run.player.z) >= 5.4))
-    assert.ok(incoming.every((part, index) => incoming.slice(0, index).every(other =>
-      Math.hypot(part.x - other.x, part.z - other.z) >= .8)))
+    assert.ok(incoming.every(part => isNearArenaWall(part) && Math.hypot(part.x - run.player.x, part.z - run.player.z) >= 11.5))
     run.player.x = incoming[0].x
     run.player.z = incoming[0].z
-    run.tick = (useSurge ? run.surge!.opensAt : run.incident!.opensAt) - 1
+    const opensAt = useSurge ? run.surge!.opensAt : run.incident!.opensAt
+    run.tick = opensAt - 2
+    advanceRun(run, IDLE_INPUT)
+    assert.equal(run.enemies.some(enemy => enemy.active), false)
+    assert.ok(incoming.every(part => isNearArenaWall(part) && Math.hypot(part.x - run.player.x, part.z - run.player.z) >= 9.5))
+    assert.ok(incoming.every((part, index) => incoming.slice(0, index).every(other =>
+      Math.hypot(part.x - other.x, part.z - other.z) >= .95)))
     advanceRun(run, IDLE_INPUT)
     const spawned = run.enemies.filter(enemy => enemy.active)
-    assert.ok(spawned.length > 0 && spawned.length < incoming.length)
-    assert.ok(spawned.every(enemy => Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 3.73))
+    assert.equal(spawned.length, incoming.length)
+    assert.ok(spawned.every(enemy => isNearArenaWall(enemy) && Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) >= 9.4))
   }
 })
 

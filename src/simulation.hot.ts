@@ -20,26 +20,32 @@ const DASH_STEP = DASH_SPEED / HZ
 const FILE_STROKE_GAP = 8
 const SURGE_WARNING = 105
 const PRESS_WARNING = 68
-const PATROL_SPAWN_DISTANCE = 6.1
-const FORMATION_DISTANCE = 5.45
-const MARKED_SPAWN_DISTANCE = 3.8
+const ENTRANCE_DISTANCE = 11.5
+const MARKED_SPAWN_DISTANCE = 9.5
 const INCOMING_CLEARANCE = .68
+const ENTRANCE_X = ARENA.x - 1
+const ENTRANCE_Z = ARENA.z - 1
+const ENTRANCE_SPACING = 1.08
+const ENTRANCE_POINTS = [-1, 1].flatMap(side => [0, ENTRANCE_SPACING].flatMap(offset => [
+  ...Array.from({ length: 15 }, (_, index) => ({ x: side * (ENTRANCE_X - offset), z: (index - 7) * ENTRANCE_SPACING })),
+  ...Array.from({ length: 23 }, (_, index) => ({ x: (index - 11) * ENTRANCE_SPACING, z: side * (ENTRANCE_Z - offset) })),
+])).filter(point => isOpenFloor(point.x, point.z, INCOMING_CLEARANCE))
 export const SURGES = [
   { tick: 32 * HZ, title: '上料尖峰', detail: '整列超差件从一侧入场，沿空出来的一侧绕行。', first: 9, second: 4 },
   { tick: 122 * HZ, title: '复测积压', detail: '两批零件轮番压近，留意后到的远程干扰。', first: 12, second: 9 },
-  { tick: 180 * HZ, title: '交班前满载', detail: '两侧分批进料，留一条通往试验台的退路。', first: 16, second: 12 },
+  { tick: 180 * HZ, title: '交班前满载', detail: '场边分批进料，留一条通往试验台的退路。', first: 16, second: 12 },
 ] as const
 export const INCIDENTS = [
   {
-    title: '装配催料', batch: '首批装配件', detail: '装配工位在等料，待检件将从两侧入场。',
+    title: '装配催料', batch: '首批装配件', detail: '装配工位在等料，待检件将从场边入场。',
     measurement: { name: '衬套外径', nominal: 20, tolerance: .05, measured: 20.08, unit: 'mm' },
   },
   {
-    title: '试验数据异常', batch: '试验数据批次', detail: '复核前发现载荷偏高，留意两侧数据屏的蓄力。',
+    title: '试验数据异常', batch: '试验数据批次', detail: '复核前发现载荷偏高，留意场边数据屏的蓄力。',
     measurement: { name: '试验载荷', nominal: 4, tolerance: .10, measured: 4.24, unit: 'kN' },
   },
   {
-    title: '交付催验', batch: '末批待验件', detail: '交班前要核对垫片厚度，末批样件将从两侧入场。',
+    title: '交付催验', batch: '末批待验件', detail: '交班前要核对垫片厚度，末批样件将从场边入场。',
     measurement: { name: '垫片厚度', nominal: 2, tolerance: .03, measured: 2.07, unit: 'mm' },
   },
 ] as const
@@ -407,10 +413,12 @@ export function createRun(seed = 0x41c603a1): Run {
       fileAt: 0, fileHits: 0, fileDamage: 0, pressAfterSet: 0, press: null },
   }
 
-  for (let i = 0; i < 7; i++) {
-    const angle = (i + 1) * TAU / 8 + 0.14 * random(run)
-    const distance = 5.40 + random(run) * .85
-    spawnEnemy(run, 'blank', Math.cos(angle) * distance, run.player.z + Math.sin(angle) * distance)
+  const opening: GroundPoint[] = []
+  for (const [side, z] of [[-1, -4.9], [-1, -1.8], [-1, 1.5], [-1, 4.8], [1, -4.7], [1, -.5], [1, 4.5]]) {
+    const point = findEntrance(run.player, side * ENTRANCE_X, z + random(run) - .5, opening)
+    if (!point) continue
+    opening.push(point)
+    spawnEnemy(run, 'blank', point.x, point.z)
   }
   return run
 }
@@ -477,32 +485,48 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1,
 function spawnPatrol(run: Run) {
   const time = run.tick / HZ
   const number = time < 25 ? 1 : time < 60 ? 2 : time < 112 ? 3 : time < 172 ? 4 : 5
+  const { player } = run
+  const placed: GroundPoint[] = []
   for (let i = 0; i < number; i++) {
     const roll = random(run)
     const kind: EnemyKind = time > 87 && roll < 0.16
       ? 'phantom'
       : time > 43 && roll < (time > 87 ? 0.34 : 0.26) ? 'bolt' : 'blank'
     const heading = random(run) * TAU
-    const spread = PATROL_SPAWN_DISTANCE + random(run) * (time < 35 ? 2 : 4.6)
-    const point = patrolPoint(run.player, heading, spread)
+    const distance = ENTRANCE_DISTANCE + random(run) * (time < 35 ? 2 : 4.6)
+    const point = findEntrance(player, player.x + Math.cos(heading) * distance, player.z + Math.sin(heading) * distance, placed)
+    if (!point) continue
+    placed.push(point)
     spawnEnemy(run, kind, point.x, point.z)
   }
   run.nextSpawn = run.tick + Math.max(47, Math.round(104 - time * 0.29 + random(run) * 18))
 }
 
-function patrolPoint(player: GroundPoint, heading: number, spread: number) {
-  // Near a corner, the shorter ring lets the wave keep its count without closing in on the player.
-  for (const distance of [spread, PATROL_SPAWN_DISTANCE]) {
-    for (let turn = 0; turn < 8; turn++) {
-      const angle = heading + turn * TAU / 8
-      const x = player.x + Math.cos(angle) * distance
-      const z = player.z + Math.sin(angle) * distance
-      if (isOpenFloor(x, z, INCOMING_CLEARANCE)) return { x, z }
-    }
+function findEntrance(player: GroundPoint, x: number, z: number, placed: readonly GroundPoint[]) {
+  let best: GroundPoint | undefined
+  let nearest = Infinity
+  for (const point of ENTRANCE_POINTS) {
+    if (Math.hypot(point.x - player.x, point.z - player.z) < ENTRANCE_DISTANCE) continue
+    const distance = Math.hypot(point.x - x, point.z - z)
+    if (distance >= nearest || placed.some(other => Math.hypot(point.x - other.x, point.z - other.z) < .95)) continue
+    best = point
+    nearest = distance
   }
-  const farX = ARENA.x - INCOMING_CLEARANCE
-  const z = clamp(player.z, -ARENA.z + INCOMING_CLEARANCE, ARENA.z - INCOMING_CLEARANCE)
-  return { x: player.x < 0 ? farX : -farX, z }
+  return best
+}
+
+function moveCloseMarkers(player: GroundPoint, parts: readonly IncomingPart[]) {
+  const isTooClose = (part: IncomingPart) => Math.hypot(part.x - player.x, part.z - player.z) < MARKED_SPAWN_DISTANCE
+  if (!parts.some(isTooClose)) return
+  const placed = parts.filter(part => !isTooClose(part))
+  for (const part of parts) {
+    if (!isTooClose(part)) continue
+    const point = findEntrance(player, part.x, part.z, placed)
+    if (!point) continue
+    part.x = point.x
+    part.z = point.z
+    placed.push(part)
+  }
 }
 
 const SURGE_GAP = 53
@@ -511,35 +535,13 @@ export function surgeGroupAt(surge: Surge, group: number): number {
   return surge.opensAt + group * SURGE_GAP
 }
 
-function formationPoint(player: GroundPoint, x: number, z: number, placed: readonly GroundPoint[]) {
-  const origin = nearestFreePoint(x, z, INCOMING_CLEARANCE)
-  const available = (px: number, pz: number) =>
-    Math.hypot(px - player.x, pz - player.z) >= FORMATION_DISTANCE &&
-    placed.every(part => Math.hypot(px - part.x, pz - part.z) >= .82)
-  if (available(origin.x, origin.z)) return origin
-
-  // Preserve the formation locally when a bench or wall takes up its planned point.
-  const heading = Math.atan2(origin.z - player.z, origin.x - player.x)
-  for (let radius = 1.1; radius <= 6.61; radius += 1.1) {
-    for (let turn = 0; turn < 12; turn++) {
-      const bearing = heading + turn * TAU / 12
-      const px = origin.x + Math.cos(bearing) * radius
-      const pz = origin.z + Math.sin(bearing) * radius
-      if (isOpenFloor(px, pz, INCOMING_CLEARANCE) && available(px, pz)) return { x: px, z: pz }
-    }
-  }
-  return null
-}
-
 function prepareSurge(run: Run, slot: number): Surge {
   const profile = SURGES[slot]
   const { player } = run
   const seededSide = ((run.seed >>> slot) & 1) === 1 ? 1 : -1
-  const leadSide = Math.abs(player.x) > 5.1 ? -Math.sign(player.x) : seededSide
+  const leadSide = Math.abs(player.x) > 3.5 ? -Math.sign(player.x) : seededSide
   const groups = [profile.first, profile.second].map((count, group) => {
-    const preferred = group === 0 || slot === 0 ? leadSide : -leadSide
-    const room = ARENA.x - INCOMING_CLEARANCE - preferred * player.x
-    const side = room >= FORMATION_DISTANCE ? preferred : -preferred
+    const side = group === 0 || slot === 0 ? leadSide : -leadSide
     const centerZ = clamp(player.z, -3.5, 3.5)
     const parts: IncomingPart[] = []
     for (let index = 0; index < count; index++) {
@@ -547,10 +549,10 @@ function prepareSurge(run: Run, slot: number): Surge {
       const width = Math.min(8, count - row * 8)
       const line = (index % 8 - (width - 1) * .5) * 1.12
       const z = centerZ + line + (group ? .74 * side : 0)
-      const x = player.x + side * (6.5 + .97 * row + group * .92)
+      const x = side * (ENTRANCE_X - ENTRANCE_SPACING * row)
       const kind = slot > 0 && group === 1 && index % 3 === 0 ? 'phantom'
         : slot > 0 && index % (slot === 2 ? 3 : 5) === 0 ? 'bolt' : 'blank'
-      const point = formationPoint(player, x, z, parts)
+      const point = findEntrance(player, x, z, parts)
       if (point) parts.push({ kind, ...point })
     }
     return parts
@@ -567,6 +569,9 @@ function advanceSurges(run: Run) {
   }
   const surge = run.surge
   if (!surge) return signal
+  for (let group = surge.issued; group < surge.groups.length; group++) {
+    moveCloseMarkers(run.player, surge.groups[group])
+  }
   while (surge.issued < surge.groups.length && run.tick >= surgeGroupAt(surge, surge.issued)) {
     for (const part of surge.groups[surge.issued]) spawnEnemy(run, part.kind, part.x, part.z, -1, MARKED_SPAWN_DISTANCE)
     surge.issued++
@@ -1083,16 +1088,14 @@ function prepareIncident(run: Run, slot: number) {
   const z = clamp(player.z, -4.15, 4.15)
   const dx = Math.abs(x) > 1.75 || Math.abs(z) <= 1.5 ? (x > 0 ? -1 : 1) : 0
   const dz = dx === 0 ? (z > 0 ? -1 : 1) : 0
-  const sideX = -dz
-  const sideZ = dx
   const composition = incidentBatches[slot]
   const parts: IncomingPart[] = []
   for (let i = 0; i < composition.length; i++) {
     const side = i % 2 === 0 ? 1 : -1
     const row = Math.floor(i / 14)
     const front = (Math.floor(i / 2) % 7 - 3) * 1.10
-    const flank = (5.65 + row * 1.16 + random(run) * .40) * side
-    const point = formationPoint(player, x + dx * front + sideX * flank, z + dz * front + sideZ * flank, parts)
+    const flank = side * (ENTRANCE_X - ENTRANCE_SPACING * row)
+    const point = findEntrance(player, flank, z + front + random(run) * .40 - .20, parts)
     if (point) parts.push({ kind: composition[i], ...point })
   }
   const offer = nearestFreePoint(x + dx * .80, z + dz * .80, .66)
@@ -1138,9 +1141,12 @@ function advanceIncident(run: Run) {
     signal |= Signal.incidentWarning
   }
   const incident = run.incident
-  if (incident?.stage === 'warning' && run.tick >= opensAt) {
-    openIncident(run, incident)
-    signal |= Signal.offer
+  if (incident?.stage === 'warning') {
+    moveCloseMarkers(run.player, incident.parts)
+    if (run.tick >= opensAt) {
+      openIncident(run, incident)
+      signal |= Signal.offer
+    }
   }
   return signal
 }
@@ -1275,9 +1281,13 @@ function scheduleWaves(run: Run) {
   }
   boss.nextWave = run.tick + waveCycleTicks(run)
   if (boss.waveSets % 3 === 0) {
+    const placed: GroundPoint[] = []
     for (let i = 0; i < 4; i++) {
       const angle = i * TAU / 4 + random(run) * 0.8
-      spawnEnemy(run, 'blank', boss.x + Math.cos(angle) * 7.1, boss.z + Math.sin(angle) * 7.1, -1, PATROL_SPAWN_DISTANCE)
+      const point = findEntrance(run.player, boss.x + Math.cos(angle) * ENTRANCE_X, boss.z + Math.sin(angle) * ENTRANCE_Z, placed)
+      if (!point) continue
+      placed.push(point)
+      spawnEnemy(run, 'blank', point.x, point.z)
     }
   }
 }
