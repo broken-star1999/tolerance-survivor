@@ -1,8 +1,5 @@
 export type SpriteName =
-  | 'engineer' | 'engineer-stride-a' | 'engineer-stride-b'
-  | 'engineer-front' | 'engineer-front-a' | 'engineer-front-b'
-  | 'engineer-back' | 'engineer-back-a' | 'engineer-back-b' | 'held-caliper'
-  | 'blank' | 'bolt' | 'phantom' | 'boss' | 'boss-charged'
+  | 'blank' | 'bolt' | 'phantom'
   | 'xp' | 'pass' | 'beautifier' | 'spark' | 'projectile'
   | 'caliper' | 'guard' | 'range' | 'boot' | 'magnet' | 'pulse'
   | 'wrench' | 'file' | 'saw' | 'tape' | 'mallet'
@@ -45,7 +42,6 @@ const plum = '#542f51'
 const magenta = '#bd587f'
 const pink = '#f591a8'
 const darkGlass = '#162d3b'
-const iceGlint = '#b0e2e5'
 
 function painterFor(context: CanvasRenderingContext2D): PixelPainter {
   return {
@@ -87,105 +83,6 @@ function octagon(x: number, y: number, width: number, height: number, clip: numb
     [x + width, y + height - clip], [x + width - clip, y + height], [x + clip, y + height],
     [x, y + height - clip], [x, y + clip],
   ]
-}
-
-type EngineerView = 'front' | 'side' | 'back'
-type Stride = -1 | 0 | 1
-
-function drawEngineer({ block, patch }: PixelPainter, view: EngineerView, stride: Stride): void {
-  const back = view === 'back'
-  const side = view === 'side'
-  const suitShadow = '#205057'
-  const suit = '#327a74'
-  const suitLight = '#64ab91'
-  const helmetShadow = '#ab6231'
-  const skinShadow = '#97583e'
-  const skin = '#d9986a'
-  const skinLight = '#efbc88'
-
-  // Alternate two planted feet. The construction helmet stays steady as the arms swing.
-  const left = 7 - stride * (side ? 2 : 1)
-  const right = 17 + stride * (side ? 3 : 1)
-  const leftY = stride < 0 ? 33 : 35
-  const rightY = stride > 0 ? 33 : 35
-  for (const [x, y, tone, shine] of [
-    [left, leftY, suitShadow, steelShade],
-    [right, rightY, suit, steel],
-  ] as const) {
-    block(ink, x + 1, 28, 8, y - 27)
-    block(tone, x + 2, 29, 5, y - 29)
-    block(shine, x + 5, y - 3, 2, 2)
-    patch(ink, [[x + 1, y], [x + 8, y], [x + 10, y + 2], [x + 10, y + 5], [x, y + 5], [x, y + 2]])
-    block(slate, x + 2, y + 1, 6, 3)
-    block(shine, x + 5, y + 2, 4, 1)
-    block('#0a151d', x + 1, y + 4, 8, 1)
-  }
-
-  patch(ink, [[9, 16], [22, 16], [26, 20], [31, 24], [31, 28], [27, 31], [23, 30], [22, 33], [9, 33], [7, 30], [3, 30], [1, 26], [3, 21], [6, 18]])
-  patch(suitShadow, [[8, 18], [21, 18], [26, 21], [27, 26], [23, 29], [21, 32], [10, 32], [8, 28], [5, 28], [3, 25], [5, 21]])
-  patch(suit, [[8, 19], [14, 18], [21, 19], [24, 21], [21, 27], [20, 30], [11, 30], [8, 27], [5, 25], [6, 21]])
-  patch(suitLight, [[8, 19], [12, 19], [11, 22], [7, 23], [5, 24], [6, 21]])
-  block(slate, 9, 29, 14, 2)
-  block(amber, 11, 29, 10, 1)
-  block(paleGold, side ? 17 : 14, 29, 3, 1)
-  block(deepTeal, 10, 31, 12, 1)
-
-  if (back) {
-    block(suitShadow, 10, 20, 12, 8)
-    block(slate, 11, 20, 10, 3)
-    block(steel, 12, 20, 8, 1)
-    block(paleGold, 8, 20, 2, 7)
-    block(gold, 22, 20, 2, 7)
-    block(mint, 10, 25, 12, 2)
-    block(suitLight, 12, 26, 8, 1)
-  } else {
-    block(gold, 9, 20, 2, 7)
-    block(paleGold, 9, 20, 1, 4)
-    block(mint, 11, 25, side ? 7 : 12, 2)
-    if (!side) block(paleGold, 22, 20, 2, 7)
-    block(deepTeal, 14, 24, 2, 5)
-    block('#daede0', 17, 21, 3, 2)
-    block(steelShade, 18, 23, 2, 1)
-  }
-
-  const gloveY = side ? 23 + stride : 24 - stride
-  patch(slate, [[23, 20], [26, 22], [29, gloveY], [30, gloveY + 3], [28, gloveY + 5], [24, gloveY + 4], [22, 24]])
-  block(suitLight, 23, 21, 2, 3)
-  block(amber, 26, gloveY + 1, 3, 3)
-  block(paleGold, 27, gloveY + 1, 2, 1)
-  block(slate, 3, 26 + stride, 3, 2)
-  block(steel, 4, 26 + stride, 2, 1)
-
-  patch(ink, [[6, 10], [24, 9], [27, 12], [26, 17], [23, 20], [11, 19], [7, 16]])
-  if (back) {
-    patch(slate, [[8, 11], [23, 11], [25, 14], [23, 18], [12, 18], [9, 16]])
-    block(steelShade, 9, 13, 15, 2)
-    block(skinShadow, 13, 17, 8, 2)
-  } else {
-    patch(skinShadow, [[9, 12], [23, 11], [25, 13], [25, 16], [22, 19], [12, 18], [9, 16]])
-    patch(skin, [[11, 12], [23, 12], [25, 14], [23, 17], [18, 18], [12, 16]])
-    block(skinLight, side ? 21 : 14, 16, side ? 4 : 5, 1)
-    block(darkGlass, side ? 16 : 10, 12, side ? 10 : 15, 4)
-    block(steel, side ? 18 : 11, 12, side ? 7 : 13, 1)
-    block(silver, side ? 19 : 13, 13, side ? 3 : 2, 1)
-    block(iceGlint, 22, 13, 2, 1)
-    block(skinShadow, 18, 17, 3, 1)
-  }
-
-  patch(ink, [[5, 10], [5, 7], [7, 4], [11, 1], [20, 1], [24, 3], [27, 7], [28, 10], [32, 10], [33, 12], [31, 14], [4, 14], [1, 12], [2, 10]])
-  patch(helmetShadow, [[6, 9], [7, 6], [11, 2], [20, 2], [25, 5], [27, 10], [31, 11], [31, 13], [4, 13], [3, 11]])
-  patch(gold, [[7, 9], [8, 6], [12, 3], [19, 2], [24, 5], [25, 8], [29, 10], [30, 11], [4, 12], [4, 11]])
-  patch(paleGold, [[8, 8], [10, 5], [14, 3], [18, 3], [17, 5], [13, 6], [11, 8]])
-  block('#fff0ab', 12, 4, 5, 1)
-  block('#f6cd64', 19, 4, 2, 5)
-  block(amber, 22, 6, 3, 4)
-  block(paleGold, 5, 10, 13, 2)
-  block('#fff0ab', 6, 10, 6, 1)
-  block(gold, 24, 11, 5, 1)
-  if (back) {
-    block(helmetShadow, 13, 8, 8, 3)
-    block(paleGold, 14, 8, 6, 1)
-  }
 }
 
 function drawBlank({ block, patch }: PixelPainter): void {
@@ -256,66 +153,6 @@ function drawPhantom({ block, patch }: PixelPainter): void {
   block(pink, 12, 34, 2, 1)
   block('#986498', 22, 33, 5, 1)
   block(magenta, 20, 37, 3, 1)
-}
-
-function drawBoss({ block, patch }: PixelPainter, charging: boolean): void {
-  const signal = charging ? '#ff9861' : '#dd744d'
-  const hot = charging ? '#ffde98' : '#f8ad61'
-  patch(ink, [[6, 41], [17, 36], [25, 43], [39, 43], [47, 36], [58, 41], [64, 51], [63, 59], [46, 62], [39, 58], [25, 58], [19, 62], [1, 60], [0, 53]])
-  for (const x of [2, 44]) {
-    patch(slate, [[x + 5, 44], [x + 13, 40], [x + 17, 45], [x + 18, 55], [x + 14, 59], [x + 1, 58], [x, 54]])
-    patch(deepTeal, [[x + 5, 45], [x + 13, 42], [x + 16, 45], [x + 15, 53], [x + 4, 55], [x + 2, 52]])
-    block(teal, x + 5, 48, 8, 3)
-    block(steel, x + 3, 54, 11, 2)
-    block(silver, x + 5, 54, 6, 1)
-    block(amber, x + 3, 57, 11, 1)
-    block(ink, x + 7, 56, 2, 3)
-  }
-  patch(ink, [[4, 16], [10, 12], [17, 6], [48, 6], [54, 11], [61, 15], [63, 43], [59, 50], [48, 55], [17, 55], [6, 50], [1, 43]])
-  patch(slate, [[6, 17], [13, 12], [18, 8], [47, 8], [53, 13], [59, 16], [61, 42], [57, 48], [47, 53], [18, 53], [8, 48], [3, 42]])
-  patch(steelShade, [[6, 18], [16, 11], [20, 9], [46, 9], [57, 16], [52, 19], [14, 19]])
-  block(steel, 18, 10, 27, 2)
-  block(silver, 21, 10, 16, 1)
-  block(deepTeal, 6, 23, 11, 21)
-  block(deepTeal, 48, 23, 10, 20)
-  block(teal, 7, 24, 3, 17)
-  block(teal, 54, 25, 3, 13)
-  for (let vent = 0; vent < 4; vent++) {
-    block(slate, 8, 26 + vent * 4, 7, 2)
-    block(steelShade, 50, 26 + vent * 4, 5, 2)
-  }
-  for (const x of [10, 50]) {
-    block(ink, x - 2, 3, 8, 11)
-    block(rust, x - 1, 2, 6, 8)
-    block(signal, x, 3, 4, 6)
-    block(hot, x, 4, 2, 2)
-    block(steelShade, x - 1, 10, 6, 2)
-    block(gold, x, 43, 3, 2)
-    block(amber, x - 2, 46, 3, 2)
-  }
-
-  patch(ink, octagon(12, 12, 41, 41, 10))
-  patch(steelShade, octagon(14, 13, 37, 37, 9))
-  patch(steel, octagon(15, 14, 34, 34, 8))
-  patch(silver, [[23, 14], [41, 14], [47, 19], [44, 21], [40, 17], [24, 17], [19, 23], [16, 23]])
-  patch(slate, [[48, 23], [49, 39], [40, 48], [24, 48], [18, 43], [22, 42], [27, 45], [40, 44], [45, 39], [45, 24]])
-  for (const [x, y] of [[22, 18], [41, 19], [16, 28], [46, 32], [22, 42], [40, 43]]) {
-    block(slate, x, y, 3, 3)
-    block(x < 32 ? silver : steel, x, y, 2, 1)
-  }
-  patch(ink, octagon(19, 19, 27, 26, 6))
-  patch('#683b37', octagon(21, 21, 23, 22, 6))
-  patch(rust, [[26, 22], [37, 22], [43, 27], [43, 36], [37, 41], [28, 41], [23, 37], [22, 28]])
-  patch(signal, [[26, 23], [37, 23], [42, 27], [41, 32], [38, 30], [37, 27], [29, 27], [25, 32], [23, 30]])
-  patch(hot, [[28, 24], [35, 24], [39, 26], [39, 28], [34, 27], [29, 27], [27, 29], [25, 28]])
-  patch('#b55e40', [[42, 31], [41, 37], [36, 41], [28, 40], [25, 36], [28, 36], [33, 38], [37, 37], [39, 33]])
-  patch(ink, octagon(26, 26, 14, 12, 4))
-  patch(signal, octagon(29, 28, 8, 8, 2))
-  block(hot, 31, 30, 4, 4)
-  block(white, 31, 30, 2, 2)
-  block(ink, 23, 50, 18, 4)
-  block(charging ? signal : deepTeal, 25, 51, 14, 2)
-  block(charging ? hot : mint, 26, 51, 7, 1)
 }
 
 function drawCaliper({ block, patch }: PixelPainter): void {
@@ -422,36 +259,9 @@ function drawMallet({ block, patch }: PixelPainter): void {
 }
 
 const designs: Record<SpriteName, SpriteDesign> = {
-  engineer: { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'side', 0) },
-  'engineer-stride-a': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'side', 1) },
-  'engineer-stride-b': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'side', -1) },
-  'engineer-front': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'front', 0) },
-  'engineer-front-a': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'front', 1) },
-  'engineer-front-b': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'front', -1) },
-  'engineer-back': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'back', 0) },
-  'engineer-back-a': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'back', 1) },
-  'engineer-back-b': { width: 35, height: 42, draw: (painter) => drawEngineer(painter, 'back', -1) },
-  'held-caliper': {
-    width: 17,
-    height: 15,
-    draw({ block, patch }) {
-      patch(ink, [[3, 2], [9, 2], [9, 5], [7, 5], [7, 6], [15, 6], [16, 8], [15, 11], [8, 11], [8, 12], [12, 12], [12, 15], [5, 15], [3, 12], [3, 11], [1, 11], [0, 8], [2, 6]])
-      block(silver, 4, 3, 4, 1)
-      block(silver, 4, 4, 2, 5)
-      block(silver, 5, 9, 2, 4)
-      block(steel, 7, 12, 4, 2)
-      block(iceGlint, 2, 7, 13, 3)
-      block(white, 5, 7, 9, 1)
-      block(teal, 8, 8, 2, 2)
-      block(steelShade, 12, 8, 1, 2)
-      block(steelShade, 14, 8, 1, 1)
-    },
-  },
   blank: { width: 41, height: 30, draw: drawBlank },
   bolt: { width: 36, height: 45, draw: drawBolt },
   phantom: { width: 35, height: 40, draw: drawPhantom },
-  boss: { width: 65, height: 64, draw: (painter) => drawBoss(painter, false) },
-  'boss-charged': { width: 65, height: 64, draw: (painter) => drawBoss(painter, true) },
   xp: {
     width: 11,
     height: 13,
@@ -598,7 +408,7 @@ export function createSpriteAtlas(): {
   frames: Record<SpriteName, SpriteFrame>
 } {
   const canvas = document.createElement('canvas')
-  canvas.width = 512
+  canvas.width = 256
   canvas.height = 256
   const context = canvas.getContext('2d')
   if (!context) throw new Error('2D canvas is unavailable for the sprite atlas')

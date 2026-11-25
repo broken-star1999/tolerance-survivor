@@ -1,10 +1,12 @@
 import {
-  BoxGeometry, CanvasTexture, CircleGeometry, Color, DoubleSide,
+  BoxGeometry, CanvasTexture, CircleGeometry, Color, DirectionalLight, DoubleSide, HemisphereLight,
   DynamicDrawUsage, InstancedBufferAttribute, InstancedBufferGeometry, InstancedMesh, LinearSRGBColorSpace,
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
 import { ARENA, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { stationContact } from './floor-plan.ts'
+import { createInspector, createTestRig } from './models.ts'
 import { createSpriteAtlas, type SpriteName } from './sprites.ts'
 import { createWorkshop } from './workshop.ts'
 
@@ -16,12 +18,6 @@ const LILAC = new Color('#f593db')
 const RUST = new Color('#ff8a63')
 const ICE = new Color('#67bed3')
 const DARK = new Color('#071619')
-const WALK_CYCLE = [0, 1, 0, 2] as const
-const ENGINEER_FRAMES = {
-  side: ['engineer', 'engineer-stride-a', 'engineer-stride-b'],
-  front: ['engineer-front', 'engineer-front-a', 'engineer-front-b'],
-  back: ['engineer-back', 'engineer-back-a', 'engineer-back-b'],
-} as const satisfies Record<string, readonly SpriteName[]>
 
 const EMPTY_FLAGS = { depthWrite: false, transparent: true }
 type Atlas = ReturnType<typeof createSpriteAtlas>
@@ -225,18 +221,27 @@ export function createGameView(host: HTMLElement) {
   const world = new Scene()
   world.background = new Color('#13202a')
   world.add(createWorkshop())
+  world.add(new HemisphereLight('#dfedf5', '#746c71', 1.77))
+  const overhead = new DirectionalLight('#ffe0b8', 2.08)
+  overhead.position.set(-7, 12, -4)
+  world.add(overhead)
+  const inspector = createInspector()
+  const testRig = createTestRig()
+  world.add(inspector.group, testRig.group)
   const camera = new OrthographicCamera(-18, 18, 10, -10, .1, 100)
 
   const atlas = createSpriteAtlas()
   const sprites = new SpriteBatch(atlas)
   world.add(sprites.mesh)
   const shadows = makeFloorBatch(new CircleGeometry(1, 17), 200, .62)
+  const lightShadows = makeFloorBatch(new CircleGeometry(1, 12), 8, .36)
   const markings = makeFloorBatch(new RingGeometry(.89, 1, 42), 64, .75)
   const strips = makeFloorBatch(new BoxGeometry(1, .022, 1), 350, .82)
   shadows.renderOrder = 1
+  lightShadows.renderOrder = 2
   markings.renderOrder = 4
   strips.renderOrder = 6
-  const floorBatches = [shadows, markings, strips]
+  const floorBatches = [shadows, lightShadows, markings, strips]
   world.add(...floorBatches)
   const dummy = new Object3D()
 
@@ -266,6 +271,7 @@ export function createGameView(host: HTMLElement) {
   let viewHeight = 20
   let cameraX = 0
   let cameraZ = 0
+  let renderedRun: Run | null = null
 
   function resize() {
     const bounds = host.getBoundingClientRect()
@@ -298,6 +304,16 @@ export function createGameView(host: HTMLElement) {
     shadows.setMatrixAt(i, dummy.matrix)
     shadows.setColorAt(i, DARK)
     shadows.count++
+  }
+
+  function castShadow(x: number, z: number, width: number, length: number) {
+    const index = lightShadows.count++
+    dummy.position.set(x + length * .34, .020, z + length * .25)
+    dummy.rotation.set(-Math.PI / 2, 0, -.49)
+    dummy.scale.set(length, width, 1)
+    dummy.updateMatrix()
+    lightShadows.setMatrixAt(index, dummy.matrix)
+    lightShadows.setColorAt(index, DARK)
   }
 
   function marker(x: number, z: number, radius: number, color: Color, height = .045) {
@@ -467,19 +483,35 @@ export function createGameView(host: HTMLElement) {
     }
     for (const enemy of run.enemies) {
       if (!enemy.active) continue
-      const bob = .03 + .074 * Math.sin(time * (enemy.kind === 'blank' ? 13 : 9) + enemy.x * 2 + enemy.z)
+      const charging = enemy.mode === 1
+      const recovering = enemy.mode === 3
+      const bob = .04 + (recovering ? .021 : .087) *
+        Math.sin(time * (charging ? 29 : enemy.kind === 'blank' ? 13 : 9) + enemy.x * 2 + enemy.z)
       const flash = enemy.flashUntil > run.tick ? .74 : 0
       const width = enemy.kind === 'bolt' ? 1.08 : enemy.kind === 'phantom' ? 1.02 : .99
       const height = enemy.kind === 'bolt' ? 1.44 : enemy.kind === 'phantom' ? 1.24 : .79
       shadow(enemy.x, enemy.z, width * .48, width * .31)
-      sprites.add(enemy.kind, enemy.x, enemy.z, width, height, Math.max(.025, bob), enemy.facing, flash)
-      if (enemy.mode === 1) {
-        const length = enemy.kind === 'bolt' ? 5.8 : 4.4
-        const count = enemy.kind === 'bolt' ? 7 : 5
-        for (let i = 0; i < count; i++) {
-          const a = .63 + length * i / count
-          const b = a + .39
-          line(enemy.x + enemy.dx * a, enemy.z + enemy.dz * a, enemy.x + enemy.dx * b, enemy.z + enemy.dz * b, enemy.kind === 'bolt' ? .22 : .09, enemy.kind === 'bolt' ? RUST : LILAC)
+      sprites.add(enemy.kind, enemy.x, enemy.z, width * (recovering ? 1.05 : 1), height * (recovering ? .91 : 1),
+        Math.max(.025, bob), enemy.facing, Math.max(flash, charging ? .27 : 0))
+      if (charging) {
+        const bolt = enemy.kind === 'bolt'
+        const tone = bolt ? RUST : LILAC
+        const maximum = bolt ? 6.12 : 9.4
+        const travel = maximum * stationContact(enemy.x, enemy.z, enemy.x + enemy.dx * maximum,
+          enemy.z + enemy.dz * maximum, bolt ? enemy.radius : .08)
+        marker(enemy.x, enemy.z, enemy.radius + .14, tone, .057)
+        for (let a = .59; a < travel - .12; a += bolt ? .74 : 1.06) {
+          const b = Math.min(travel, a + (bolt ? .38 : .31))
+          line(enemy.x + enemy.dx * a, enemy.z + enemy.dz * a, enemy.x + enemy.dx * b,
+            enemy.z + enemy.dz * b, bolt ? .19 : .076, tone)
+        }
+        if (bolt && travel > .82) {
+          const x = enemy.x + enemy.dx * travel
+          const z = enemy.z + enemy.dz * travel
+          for (const side of [-1, 1]) {
+            line(x - enemy.dx * .36 - enemy.dz * side * .21, z - enemy.dz * .36 + enemy.dx * side * .21,
+              x, z, .073, tone)
+          }
         }
       }
     }
@@ -490,25 +522,30 @@ export function createGameView(host: HTMLElement) {
     }
 
     const { player } = run
-    const dashing = run.tick < player.dashUntil
-    const dx = dashing ? player.dashX : player.dx
-    const dz = dashing ? player.dashZ : player.dz
-    const pose = Math.abs(dx) > Math.abs(dz) * .93 ? 'side' : dz > 0 ? 'front' : 'back'
-    const facing = pose === 'side' && dx < 0 ? -1 : 1
-    const step = player.moving ? WALK_CYCLE[Math.floor(run.tick / 5) % WALK_CYCLE.length] : 0
-    const flash = run.tick - player.hurtAt < 17 && Math.floor(run.tick / 3) % 2 === 0 ? .89 : 0
-    shadow(player.x, player.z, .55, .33)
-    marker(player.x, player.z, .43, run.tick < run.boostUntil ? GOLD : MINT)
-    sprites.add(ENGINEER_FRAMES[pose][step], player.x, player.z, 1.23, 1.53, .05, facing, flash)
-    if (run.ranks.caliper && pose !== 'back') {
-      sprites.add('held-caliper', player.x + .45 * facing, player.z + .14, .45, .40, .77, facing, flash)
-    }
+    const dashing = run.tick < player.dashUntil && player.moving
+    const stroke = run.effects.find(effect => effect.kind === 'slice' && run.tick - effect.from < 12 && effect.until > run.tick)
+    const dx = dashing ? player.dashX : !player.moving && stroke ? stroke.toX - player.x : player.dx
+    const dz = dashing ? player.dashZ : !player.moving && stroke ? stroke.toZ - player.z : player.dz
+    const desired = Math.atan2(dx, dz)
+    const turn = desired - inspector.group.rotation.y
+    inspector.group.rotation.y = renderedRun === run
+      ? inspector.group.rotation.y + Math.atan2(Math.sin(turn), Math.cos(turn)) * .36
+      : desired
+    inspector.group.position.set(player.x, 0, player.z)
+    inspector.group.scale.setScalar(1.18)
+    const flash = Math.max(0, 1 - (run.tick - player.hurtAt) / 15)
+    inspector.pose(time, player.moving, dashing, stroke ? 1 - (run.tick - stroke.from) / 12 : 0, run.ranks.caliper > 0, flash)
+    shadow(player.x - .06, player.z - .024, .46, .27)
+    castShadow(player.x, player.z, .37, dashing ? .97 : .75)
+    marker(player.x, player.z, .50, run.tick < run.boostUntil ? GOLD : MINT)
     if (run.boss.active) {
       const { boss } = run
       const charging = run.waves.some(wave => wave.active && run.tick >= wave.warnAt && run.tick < wave.pulseAt)
-      shadow(boss.x, boss.z, 1.88, 1.22)
+      testRig.group.position.set(boss.x, 0, boss.z)
+      testRig.pose(time, charging, Math.max(0, (boss.flashUntil - run.tick) / 7))
+      shadow(boss.x - .12, boss.z - .045, 1.78, 1.09)
+      castShadow(boss.x, boss.z, .99, 1.90)
       marker(boss.x, boss.z, 1.93, RUST)
-      sprites.add(charging ? 'boss-charged' : 'boss', boss.x, boss.z, 3.70, 3.66, .11 + Math.sin(time * 8) * .087, 1, boss.flashUntil > run.tick ? .63 : 0)
       for (let i = 0; i < run.waves.length; i++) drawWave(run.waves[i], run, i)
     }
 
@@ -523,11 +560,14 @@ export function createGameView(host: HTMLElement) {
         line(effect.x + dx * .09, effect.z + dz * .09, effect.x + dx * at, effect.z + dz * at, .14 * (1 - progress) + .045, withBoost ? GOLD : MINT, .12)
         line(effect.x + dx * .22 - dz * .024, effect.z + dz * .22 + dx * .024, effect.x + dx * at - dz * .021, effect.z + dz * at + dx * .021, .06 * (1 - progress) + .025, withBoost ? RUST : ICE, .11)
         if (progress < .48) sprites.add('spark', effect.toX, effect.toZ, .37, .39, .57, 1, .35)
-      } else if (effect.kind === 'hit') {
+      } else if (effect.kind === 'hit' || effect.kind === 'impact') {
+        const impact = effect.kind === 'impact'
+        if (impact) marker(effect.x, effect.z, .23 + .53 * progress, GOLD, .057)
         for (let i = 0; i < 4; i++) {
           const angle = (effect.from * .31 + i * 1.57) % TAU
           const distance = .17 + progress * .64
-          sprites.add('spark', effect.x + Math.cos(angle) * distance, effect.z + Math.sin(angle) * distance, .24 * (1.25 - progress), .22 * (1.25 - progress), .3 + progress * .43)
+          sprites.add(impact ? 'projectile' : 'spark', effect.x + Math.cos(angle) * distance, effect.z + Math.sin(angle) * distance,
+            .24 * (1.25 - progress), .22 * (1.25 - progress), .30 + progress * .43)
         }
       } else if (effect.kind === 'dash') {
         const dx = effect.toX - effect.x
@@ -567,19 +607,22 @@ export function createGameView(host: HTMLElement) {
 
   function drawTitle(time: number) {
     const portrait = aspect < 1
-    const x = portrait ? 2.1 : 6.0
-    const z = portrait ? -2.7 : .28
+    const x = portrait ? 2.23 : 6.22
+    const z = portrait ? -2.54 : -.18
     const bob = .06 * Math.sin(time * 2)
-    shadow(x, z, 1.23, .72)
+    inspector.group.scale.setScalar(portrait ? 2.16 : 2.54)
+    inspector.group.position.set(x, 0, z)
+    inspector.group.rotation.y = .43 + Math.sin(time * .85) * .19
+    inspector.pose(time, false, false, (.5 + .5 * Math.sin(time * 3.5)) ** 6 * .64, true, 0)
+    shadow(x, z, 1.13, .65)
+    castShadow(x, z, .78, 1.67)
     marker(x, z, 1.29 + bob, MINT)
-    sprites.add('engineer-front', x, z, 2.81, 3.54, .12 + bob)
-    sprites.add('held-caliper', x + 1.01, z + .30, .98, .86, 1.84 + bob)
     marker(x + 3.4, z - 3.2, .74, GOLD)
     sprites.add('pass', x + 3.4, z - 3.2, .87, .9, .26 + Math.sin(time * 2.7) * .13)
     const layout: { name: SpriteName; x: number; z: number; w: number; h: number }[] = [
       { name: 'blank', x: -3.9, z: -.8, w: 1.61, h: 1.21 },
       { name: 'blank', x: 4.8, z: 2.7, w: 1.39, h: 1.05 },
-      { name: 'bolt', x: 1.8, z: 3.7, w: 1.50, h: 1.91 },
+      { name: 'bolt', x: 3.1, z: 2.3, w: 1.50, h: 1.91 },
       { name: 'phantom', x: -.8, z: -4.2, w: 1.48, h: 1.75 },
     ]
     for (const prop of layout) {
@@ -614,8 +657,10 @@ export function createGameView(host: HTMLElement) {
   function render(run: Run | null, milliseconds: number, trainingTarget?: { x: number; z: number } | null) {
     sprites.clear()
     shadows.count = 0
+    lightShadows.count = 0
     markings.count = 0
     strips.count = 0
+    testRig.group.visible = run?.boss.active ?? false
     for (const wave of wavers) wave.visible = false
     if (run) {
       drawFloor(run)
@@ -623,8 +668,16 @@ export function createGameView(host: HTMLElement) {
         marker(trainingTarget.x, trainingTarget.z, .84 + Math.sin(run.tick / 10) * .08, MINT, .08)
         marker(trainingTarget.x, trainingTarget.z, .46, MINT, .08)
       }
-      const targetX = aspect < 1.19 ? run.player.x * .64 : run.player.x * .12
-      const targetZ = aspect < .9 ? run.player.z * .49 : run.player.z * .12
+      let targetX = aspect < 1.19 ? run.player.x * .71 : run.player.x * .20
+      const targetZ = aspect < .9 ? run.player.z * .54 : run.player.z * .17
+      if (aspect < 1.19 && run.incident?.stage === 'open') {
+        const { shortcut, inspection } = run.incident
+        const left = Math.min(run.player.x, shortcut.x, inspection.x) - 1.52
+        const right = Math.max(run.player.x, shortcut.x, inspection.x) + 1.52
+        if (right - left <= viewWidth) {
+          targetX = Math.max(right - viewWidth / 2, Math.min(left + viewWidth / 2, targetX))
+        }
+      }
       cameraX += (targetX - cameraX) * .105
       cameraZ += (targetZ - cameraZ) * .105
     } else {
@@ -633,10 +686,11 @@ export function createGameView(host: HTMLElement) {
       cameraZ = portrait ? -.25 : -2.61
       drawTitle(milliseconds / 1000)
     }
+    renderedRun = run
 
     const margin = aspect >= 1.19 ? 3.05 : Math.max(0, ARENA.x - viewWidth * .29)
     cameraX = Math.max(-margin, Math.min(margin, cameraX))
-    camera.position.set(cameraX, 28, cameraZ + 24)
+    camera.position.set(cameraX, run ? 28 : 23, cameraZ + (run ? 24 : 26))
     camera.lookAt(cameraX, 0, cameraZ)
     sprites.flush()
     for (const batch of floorBatches) {

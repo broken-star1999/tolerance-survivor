@@ -1,9 +1,12 @@
 import { ARENA, HZ, angleDistance, isWeapon, nearestShortcut, nearestTool, type Input, type Run } from '../src/simulation.hot.ts'
+import { createCrowd, detourTowardPlayer } from '../src/enemy-crowd.ts'
+import { PLAYER_CLEARANCE, stationContact } from '../src/floor-plan.ts'
 
 const TAU = Math.PI * 2
 const inputVectors = Array.from({ length: 20 }, (_, index) => ({
   x: Math.cos(index * TAU / 20), z: Math.sin(index * TAU / 20),
 }))
+const navigator = new WeakMap<Run, ReturnType<typeof createCrowd>>()
 
 export function pickTestUpgrade(run: Run) {
   let score = -Infinity
@@ -78,14 +81,25 @@ export function testInput(run: Run, takeShortcuts: boolean): Input {
     if (!enemy.active) continue
     nearest = Math.min(nearest, Math.hypot(enemy.x - p.x, enemy.z - p.z))
   }
+  const direct = stationContact(p.x, p.z, goalX, goalZ, PLAYER_CLEARANCE) === 1
   const atObjective = Math.hypot(goalX - p.x, goalZ - p.z)
-  if ((review && atObjective <= .8 && nearest > .72) || (atObjective < .38 && nearest > 3)) {
+  if (direct && ((review && atObjective <= .8 && nearest > .72) || (atObjective < .38 && nearest > 3))) {
     return { x: 0, z: 0, dash: false, accept: Boolean(shortcut && nearestShortcut(run, 1.58)) }
+  }
+  if (!direct) {
+    let route = navigator.get(run)
+    if (!route) {
+      route = createCrowd(0)
+      navigator.set(run, route)
+    }
+    const waypoint = detourTowardPlayer(route, { ...p, active: true, radius: PLAYER_CLEARANCE }, { x: goalX, z: goalZ })
+    goalX = waypoint.x
+    goalZ = waypoint.z
   }
   for (const option of inputVectors) {
     const x = p.x + option.x * 1.18
     const z = p.z + option.z * 1.18
-    if (Math.abs(x) > ARENA.x || Math.abs(z) > ARENA.z) continue
+    if (Math.abs(x) > ARENA.x || Math.abs(z) > ARENA.z || stationContact(p.x, p.z, x, z, PLAYER_CLEARANCE) < 1) continue
     let danger = 0
     let closest = 4.3
     for (const enemy of run.enemies) {
@@ -115,7 +129,8 @@ export function testInput(run: Run, takeShortcuts: boolean): Input {
   return {
     x: vector.x,
     z: vector.z,
-    dash: nearest < 1.18 && Math.abs(p.x + vector.x * 3.1) < ARENA.x && Math.abs(p.z + vector.z * 3.1) < ARENA.z,
+    dash: nearest < 1.18 && Math.abs(p.x + vector.x * 3.1) < ARENA.x && Math.abs(p.z + vector.z * 3.1) < ARENA.z &&
+      stationContact(p.x, p.z, p.x + vector.x * 3.1, p.z + vector.z * 3.1, PLAYER_CLEARANCE) === 1,
     accept: Boolean(shortcut && nearestShortcut(run, 1.58)),
   }
 }

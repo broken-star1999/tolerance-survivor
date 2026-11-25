@@ -1,10 +1,14 @@
+import { createCrowd, detourTowardPlayer, indexCrowd, spacing, type Crowd } from './enemy-crowd.ts'
+import { ARENA, PLAYER_CLEARANCE, isOpenFloor, moveOnFloor, nearestFreePoint, stationContact } from './floor-plan.ts'
+
+export { ARENA } from './floor-plan.ts'
+
 export const HZ = 60
 export const BOSS_TICK = 210 * HZ
 export const END_TICK = 300 * HZ
 export const MAX_ENEMIES = 180
 export const MAX_SHARDS = 480
 export const MAX_BOLTS = 90
-export const ARENA = { x: 14.2, z: 8.8 }
 export const SHORTCUT_TICKS = [50 * HZ, 100 * HZ, 150 * HZ] as const
 export const INSPECTION_HOLD = 96
 export const INSPECTION_RADIUS = 1.36
@@ -138,7 +142,7 @@ export function weaponCount(run: Run) {
 }
 export type ShortcutKind = keyof typeof SHORTCUTS
 export type EnemyKind = 'blank' | 'bolt' | 'phantom'
-export type EffectKind = 'slice' | 'hit' | 'dash' | 'pickup' | 'clear' | 'arrival' | 'toolPickup' | 'inspection' | WeaponId
+export type EffectKind = 'slice' | 'hit' | 'impact' | 'dash' | 'pickup' | 'clear' | 'arrival' | 'toolPickup' | 'inspection' | WeaponId
 export type Outcome = 'qualified' | 'repair' | 'stopped'
 export type Input = { x: number; z: number; dash: boolean; accept: boolean }
 
@@ -159,7 +163,7 @@ export interface Enemy extends Filing {
   speed: number
   radius: number
   facing: number
-  mode: 0 | 1 | 2
+  mode: 0 | 1 | 2 | 3
   until: number
   actionAt: number
   dx: number
@@ -253,6 +257,7 @@ export interface Run {
   endCause: 'health' | 'timeout' | 'boss' | null
   player: Player
   enemies: Enemy[]
+  crowd: Crowd
   shards: Shard[]
   projectiles: Bolt[]
   shortcuts: Shortcut[]
@@ -323,6 +328,7 @@ export function createRun(seed = 0x41c603a1): Run {
       protectedUntil: 50, hurtAt: -999, moving: false,
     },
     enemies: Array.from({ length: MAX_ENEMIES }, emptyEnemy),
+    crowd: createCrowd(MAX_ENEMIES),
     shards: Array.from({ length: MAX_SHARDS }, () => ({ active: false, x: 0, z: 0, value: 0, phase: 0 })),
     projectiles: Array.from({ length: MAX_BOLTS }, () => ({ active: false, x: 0, z: 0, dx: 0, dz: 0 })),
     shortcuts: [], incident: null, inspections: [],
@@ -384,12 +390,13 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1)
     enemy.active = true
     enemy.kind = kind
     enemy.batch = batch
-    enemy.x = clamp(x, -ARENA.x + 0.4, ARENA.x - 0.4)
-    enemy.z = clamp(z, -ARENA.z + 0.4, ARENA.z - 0.4)
+    enemy.radius = kind === 'bolt' ? 0.53 : 0.40
+    const origin = nearestFreePoint(x, z, enemy.radius)
+    enemy.x = origin.x
+    enemy.z = origin.z
     enemy.hp = kind === 'bolt' ? 46 + 16 * time : kind === 'phantom' ? 27 + 12 * time : 16 + 8 * time
     const speed = kind === 'bolt' ? 1.45 : kind === 'phantom' ? 1.66 : 2.05
     enemy.speed = speed + time * 0.46 + random(run) * 0.28 + (batch < 0 ? 0 : .27)
-    enemy.radius = kind === 'bolt' ? 0.53 : 0.40
     enemy.facing = 1
     enemy.mode = 0
     enemy.until = 0
@@ -586,8 +593,7 @@ function attackWeapons(run: Run) {
           const awayZ = target.z - player.z
           const length = Math.hypot(awayX, awayZ) || 1
           const push = calibrated ? 1.65 : 1.05
-          target.x = clamp(target.x + awayX / length * push, -ARENA.x + .3, ARENA.x - .3)
-          target.z = clamp(target.z + awayZ / length * push, -ARENA.z + .3, ARENA.z - .3)
+          moveOnFloor(target, awayX / length * push, awayZ / length * push, target.radius)
         }
       }
       if (boss.active && inToolShape(id, boss.x - player.x, boss.z - player.z, dirX, dirZ, reach + .45, calibrated)) {
@@ -621,14 +627,18 @@ function movePlayer(run: Run, input: Input) {
     player.dashUntil = run.tick + 13
     player.dashReadyAt = run.tick + 78
     player.protectedUntil = Math.max(run.tick + 16, player.protectedUntil)
-    addEffect(run, 'dash', player.x, player.z, player.x + player.dashX * 2.2, player.z + player.dashZ * 2.2, 16)
+    const toX = clamp(player.x + player.dashX * 2.2, -ARENA.x, ARENA.x)
+    const toZ = clamp(player.z + player.dashZ * 2.2, -ARENA.z, ARENA.z)
+    const travel = stationContact(player.x, player.z, toX, toZ, PLAYER_CLEARANCE)
+    addEffect(run, 'dash', player.x, player.z, player.x + (toX - player.x) * travel, player.z + (toZ - player.z) * travel, 16)
     signaled = Signal.dash
   }
   const dashing = run.tick < player.dashUntil
-  player.moving = dashing || Math.abs(moveX) + Math.abs(moveZ) > 0.01
   const speed = dashing ? 15.0 : 4.9 + run.ranks.stride * 0.49
-  player.x = clamp(player.x + (dashing ? player.dashX : moveX) * speed / HZ, -ARENA.x, ARENA.x)
-  player.z = clamp(player.z + (dashing ? player.dashZ : moveZ) * speed / HZ, -ARENA.z, ARENA.z)
+  const beforeX = player.x
+  const beforeZ = player.z
+  moveOnFloor(player, (dashing ? player.dashX : moveX) * speed / HZ, (dashing ? player.dashZ : moveZ) * speed / HZ, PLAYER_CLEARANCE)
+  player.moving = Math.abs(player.x - beforeX) + Math.abs(player.z - beforeZ) > .003
   return signaled
 }
 
@@ -658,10 +668,26 @@ function fireProjectile(run: Run, enemy: Enemy) {
   }
 }
 
+function aimAtPlayer(run: Run, enemy: Enemy, lead: number) {
+  const { player } = run
+  const x = player.x + (player.moving ? player.dx * lead : 0)
+  const z = player.z + (player.moving ? player.dz * lead : 0)
+  const predicted = isOpenFloor(x, z, .12) && stationContact(enemy.x, enemy.z, x, z, .10) === 1
+  const dx = (predicted ? x : player.x) - enemy.x
+  const dz = (predicted ? z : player.z) - enemy.z
+  const length = Math.hypot(dx, dz) || 1
+  enemy.dx = dx / length
+  enemy.dz = dz / length
+  if (Math.abs(dx) > .11) enemy.facing = Math.sign(dx)
+}
+
 function moveEnemies(run: Run) {
   let signal = 0
   const player = run.player
-  for (const enemy of run.enemies) {
+  const apart = { x: 0, z: 0 }
+  indexCrowd(run.crowd, run.enemies)
+  for (let index = 0; index < run.enemies.length; index++) {
+    const enemy = run.enemies[index]
     if (!enemy.active) continue
     if (enemy.fileHits > 0 && run.tick >= enemy.fileAt) {
       enemy.fileHits--
@@ -671,60 +697,87 @@ function moveEnemies(run: Run) {
     }
     const dx = player.x - enemy.x
     const dz = player.z - enemy.z
-    const distance = Math.hypot(dx, dz) || 0.001
+    const distance = Math.max(.001, Math.hypot(dx, dz))
     const unitX = dx / distance
     const unitZ = dz / distance
-    if (Math.abs(dx) > 0.18 && enemy.mode === 0) enemy.facing = dx < 0 ? -1 : 1
-
-    let vx = unitX * enemy.speed
-    let vz = unitZ * enemy.speed
-
-    if (enemy.kind === 'bolt') {
-      if (enemy.mode === 0 && distance < 6.2 && run.tick >= enemy.actionAt) {
-        enemy.mode = 1
-        enemy.dx = unitX
-        enemy.dz = unitZ
-        enemy.until = run.tick + 51
-      }
-
-      if (enemy.mode === 1 && run.tick >= enemy.until) {
-        enemy.mode = 2
-        enemy.until = run.tick + 34
-      } else if (enemy.mode === 2 && run.tick >= enemy.until) {
-        enemy.mode = 0
-        enemy.actionAt = run.tick + 145
-      }
-
-      if (enemy.mode === 1) {
-        vx = 0
-        vz = 0
-      } else if (enemy.mode === 2) {
-        vx = enemy.dx * 10.8
-        vz = enemy.dz * 10.8
-      }
-    } else if (enemy.kind === 'phantom') {
-      if (enemy.mode === 0 && run.tick >= enemy.actionAt && distance < 10.3) {
-        enemy.mode = 1
-        enemy.dx = unitX
-        enemy.dz = unitZ
-        enemy.until = run.tick + 32
-      } else if (enemy.mode === 1 && run.tick >= enemy.until) {
-        fireProjectile(run, enemy)
-        enemy.mode = 0
-        enemy.actionAt = run.tick + 143
-      }
-
-      if (enemy.mode === 1 || (distance > 5.25 && distance < 7.35)) {
-        vx = 0
-        vz = 0
-      } else if (distance <= 5.25) {
-        vx *= -0.81
-        vz *= -0.81
+    const side = index % 2 === 0 ? -1 : 1
+    const clearShot = enemy.kind !== 'blank' && stationContact(enemy.x, enemy.z, player.x, player.z, .10) === 1
+    let goalX = player.x
+    let goalZ = player.z
+    if (!run.training && enemy.kind === 'blank' && index % 3 !== 0 && distance > 2.45 && distance < 10.8) {
+      const offset = Math.min(2.15, (distance - 2.45) * .42) * side
+      const flankX = player.x - unitZ * offset + (player.moving ? player.dx * .72 : 0)
+      const flankZ = player.z + unitX * offset + (player.moving ? player.dz * .72 : 0)
+      if (isOpenFloor(flankX, flankZ, enemy.radius)) {
+        goalX = flankX
+        goalZ = flankZ
       }
     }
 
-    enemy.x = clamp(enemy.x + vx / HZ, -ARENA.x + 0.30, ARENA.x - 0.30)
-    enemy.z = clamp(enemy.z + vz / HZ, -ARENA.z + 0.30, ARENA.z - 0.30)
+    if (enemy.kind === 'bolt') {
+      if (enemy.mode === 0 && distance < 6.4 && clearShot && run.tick >= enemy.actionAt) {
+        enemy.mode = 1
+        aimAtPlayer(run, enemy, 1.12)
+        enemy.until = run.tick + 51
+      } else if (enemy.mode === 1 && run.tick >= enemy.until) {
+        enemy.mode = 2
+        enemy.until = run.tick + 34
+      } else if (enemy.mode === 2 && run.tick >= enemy.until) {
+        enemy.mode = 3
+        enemy.until = run.tick + 26
+      } else if (enemy.mode === 3 && run.tick >= enemy.until) {
+        enemy.mode = 0
+        enemy.actionAt = run.tick + 118
+      }
+    } else if (enemy.kind === 'phantom') {
+      if (enemy.mode === 0 && run.tick >= enemy.actionAt && distance < 9.6 && clearShot) {
+        enemy.mode = 1
+        aimAtPlayer(run, enemy, 1.27)
+        enemy.until = run.tick + 35
+      } else if (enemy.mode === 1 && run.tick >= enemy.until) {
+        fireProjectile(run, enemy)
+        enemy.mode = 3
+        enemy.until = run.tick + 20
+      } else if (enemy.mode === 3 && run.tick >= enemy.until) {
+        enemy.mode = 0
+        enemy.actionAt = run.tick + 122
+      }
+    }
+
+    if (enemy.mode === 2) {
+      const collided = moveOnFloor(enemy, enemy.dx * 10.8 / HZ, enemy.dz * 10.8 / HZ, enemy.radius)
+      if (collided) {
+        enemy.mode = 3
+        enemy.until = run.tick + 43
+        addEffect(run, 'impact', enemy.x, enemy.z, 0, 0, 21)
+      }
+    } else if (enemy.mode === 0) {
+      const skirting = enemy.kind === 'phantom' && distance < 7.7 && clearShot
+      if (skirting) {
+        const radial = clamp((distance - 6.0) * .52, -.86, .50)
+        const lateral = .72 * side
+        goalX = enemy.x + unitX * radial - unitZ * lateral
+        goalZ = enemy.z + unitZ * radial + unitX * lateral
+        if (!isOpenFloor(goalX, goalZ, enemy.radius)) {
+          goalX += unitZ * lateral * 2
+          goalZ -= unitX * lateral * 2
+        }
+      } else if (stationContact(enemy.x, enemy.z, goalX, goalZ, enemy.radius) < 1) {
+        const next = detourTowardPlayer(run.crowd, enemy, player)
+        goalX = next.x
+        goalZ = next.z
+      }
+      const steerX = goalX - enemy.x
+      const steerZ = goalZ - enemy.z
+      const length = Math.max(.12, Math.hypot(steerX, steerZ))
+      const speed = enemy.speed / HZ
+      spacing(run.crowd, run.enemies, index, apart)
+      const weight = run.training ? .28 : .77
+      const stepX = steerX / length * speed + apart.x / HZ * weight
+      const stepZ = steerZ / length * speed + apart.z / HZ * weight
+      moveOnFloor(enemy, stepX, stepZ, enemy.radius)
+      if (Math.abs(steerX) > .16) enemy.facing = Math.sign(steerX)
+    }
     if (Math.hypot(player.x - enemy.x, player.z - enemy.z) < enemy.radius + 0.27) {
       signal |= hurt(run, enemy.kind === 'bolt' ? 15 : enemy.kind === 'phantom' ? 8 : 7)
     }
@@ -736,8 +789,15 @@ function moveProjectiles(run: Run) {
   let signal = 0
   for (const bolt of run.projectiles) {
     if (!bolt.active) continue
-    bolt.x += bolt.dx * 7.4 / HZ
-    bolt.z += bolt.dz * 7.4 / HZ
+    const toX = bolt.x + bolt.dx * 7.4 / HZ
+    const toZ = bolt.z + bolt.dz * 7.4 / HZ
+    if (stationContact(bolt.x, bolt.z, toX, toZ, .08) < 1) {
+      bolt.active = false
+      addEffect(run, 'impact', bolt.x, bolt.z, 0, 0, 12)
+      continue
+    }
+    bolt.x = toX
+    bolt.z = toZ
     if (Math.abs(bolt.x) > ARENA.x + 0.7 || Math.abs(bolt.z) > ARENA.z + 0.7) {
       bolt.active = false
     } else if (Math.hypot(run.player.x - bolt.x, run.player.z - bolt.z) < 0.42) {
@@ -794,7 +854,7 @@ function dropTool(run: Run) {
   const dz = Math.sin(angle) * 4.1
   const x = Math.abs(player.x + dx) < ARENA.x - 1 ? player.x + dx : player.x - dx
   const z = Math.abs(player.z + dz) < ARENA.z - 1 ? player.z + dz : player.z - dz
-  run.tools.push({ active: true, kind, x, z })
+  run.tools.push({ active: true, kind, ...nearestFreePoint(x, z, .72) })
   run.nextTool++
 }
 
@@ -845,18 +905,19 @@ function prepareIncident(run: Run, slot: number) {
     const flank = (4.55 + row * 1.16 + random(run) * .40) * side
     parts.push({
       kind: composition[i],
-      x: clamp(x + dx * front + sideX * flank, -ARENA.x + .62, ARENA.x - .62),
-      z: clamp(z + dz * front + sideZ * flank, -ARENA.z + .62, ARENA.z - .62),
+      ...nearestFreePoint(x + dx * front + sideX * flank, z + dz * front + sideZ * flank, .62),
     })
   }
+  const offer = nearestFreePoint(x + dx * .80, z + dz * .80, .66)
+  const review = nearestFreePoint(x + dx * 5.15, z + dz * 5.15, INSPECTION_RADIUS + .08)
   run.incident = {
     slot,
     stage: 'warning',
     opensAt: SHORTCUT_TICKS[slot],
     closesAt: SHORTCUT_TICKS[slot] + 14 * HZ,
     parts,
-    shortcut: { active: false, kind, x: x + dx * .80, z: z + dz * .80 },
-    inspection: { x: x + dx * 5.15, z: z + dz * 5.15, held: 0 },
+    shortcut: { active: false, kind, ...offer },
+    inspection: { ...review, held: 0 },
   }
 }
 
@@ -1137,7 +1198,7 @@ export function placePracticePass(run: Run) {
   const { player } = run
   const direction = player.x > ARENA.x - 6.15 ? -1 : 1
   const x = player.x + direction * 1.9
-  const shortcut: Shortcut = { active: true, kind: 'pass', x, z: player.z }
+  const shortcut: Shortcut = { active: true, kind: 'pass', ...nearestFreePoint(x, player.z, .65) }
   run.shortcuts.push(shortcut)
   run.incident = {
     slot: 0,
@@ -1146,7 +1207,7 @@ export function placePracticePass(run: Run) {
     closesAt: Infinity,
     shortcut,
     parts: [],
-    inspection: { x: player.x + direction * 4.85, z: player.z, held: 0 },
+    inspection: { ...nearestFreePoint(player.x + direction * 4.85, player.z, INSPECTION_RADIUS + .08), held: 0 },
   }
   run.nextAttack = Infinity
   for (const weapon of WEAPON_IDS) run.weaponReady[weapon] = Infinity
@@ -1185,7 +1246,7 @@ export function placePracticeToolTarget(run: Run) {
   run.xpGoal = Infinity
   run.nextAttack = run.tick + 120
   const side = player.x > ARENA.x - 4.1 ? -1 : 1
-  run.tools.push({ active: true, kind: 'wrench', x: player.x + side * 2.2, z: player.z })
+  run.tools.push({ active: true, kind: 'wrench', ...nearestFreePoint(player.x + side * 2.2, player.z, .72) })
   spawnEnemy(run, 'bolt', player.x + side * 4.75, player.z)
   const target = run.enemies[(run.enemyCursor - 1 + run.enemies.length) % run.enemies.length]
   target.hp = 200

@@ -14,12 +14,13 @@ import {
   SRGBColorSpace,
 } from 'three'
 import type { BufferGeometry } from 'three'
+import { ARENA, STATIONS } from './floor-plan.ts'
 
 const FLOOR_WIDTH = 40
 const FLOOR_DEPTH = 28
 const FLOOR_SCALE = 24
-const ARENA_X = 14.2
-const ARENA_Z = 8.8
+const ARENA_X = ARENA.x
+const ARENA_Z = ARENA.z
 const quarterTurn = Math.PI / 2
 
 const paint = {
@@ -56,8 +57,14 @@ interface Part {
 
 const stencil: Record<string, readonly string[]> = {
   A: ['0110', '1001', '1111', '1001', '1001'],
+  B: ['1110', '1001', '1110', '1001', '1110'],
+  C: ['0111', '1000', '1000', '1000', '0111'],
+  Q: ['0110', '1001', '1001', '1011', '0111'],
   '-': ['000', '000', '111', '000', '000'],
   '0': ['0110', '1001', '1001', '1001', '0110'],
+  '1': ['0100', '1100', '0100', '0100', '1110'],
+  '2': ['1110', '0001', '0110', '1000', '1111'],
+  '3': ['1110', '0001', '0110', '0001', '1110'],
   '4': ['1010', '1010', '1111', '0010', '0010'],
 }
 
@@ -199,22 +206,45 @@ function makeFloorTexture(): CanvasTexture {
       rect(x, z - (z > 0 ? 0.81 : 0), 0.10, 0.88, bayColor)
     }
   }
-  const size = 3
-  let stencilX = worldX(10.58)
-  const stencilZ = worldZ(5.86)
-  ctx.fillStyle = '#687a7d'
-  for (const character of 'A-04') {
-    const rows = stencil[character]
-    rows.forEach((row, ri) => {
-      for (let ci = 0; ci < row.length; ci++) {
-        if (row[ci] === '1') ctx.fillRect(stencilX + ci * size, stencilZ + ri * size, size, size)
-      }
-    })
-    stencilX += (rows[0].length + 2) * size
+  const label = (value: string, x: number, z: number, size: number, color: string) => {
+    let left = worldX(x)
+    const top = worldZ(z)
+    ctx.fillStyle = color
+    for (const character of value) {
+      const rows = stencil[character]
+      rows.forEach((row, ri) => {
+        for (let ci = 0; ci < row.length; ci++) {
+          if (row[ci] === '1') ctx.fillRect(left + ci * size, top + ri * size, size, size)
+        }
+      })
+      left += (rows[0].length + 2) * size
+    }
   }
+  label('A-04', 10.58, 5.86, 3, '#687a7d')
   rect(10.87, 6.11, .29, .045, '#334a52')
   rect(11.77, 6.40, .37, .045, '#43585d')
   rect(12.59, 6.23, .26, .045, '#334a52')
+
+  for (const station of STATIONS) {
+    const x = station.x - station.width / 2
+    const z = station.z - station.depth / 2
+    const w = station.width
+    const d = station.depth
+    const bay = station.kind === 'isolation' ? '#766449' : station.kind === 'sampling' ? '#536972' : '#567675'
+    rect(x - .42, z - .39, w + .84, d + 1.18, '#2b3a43')
+    rect(x - .39, z - .38, w + .78, .075, bay)
+    rect(x - .39, z - .38, .075, d + 1.12, bay)
+    rect(x + w + .31, z - .38, .075, d + 1.12, bay)
+    rect(x - .38, z + d + .65, w + .76, .07, bay)
+    rect(x + .21, z + .21, w + .21, d + .12, '#24323a')
+    rect(x + .13, z + .09, w + .18, d + .12, '#1c2b33')
+    for (let offset = .08; offset < w - .13; offset += .36) {
+      rect(x + offset, z + d + .26, .17, .10, bay)
+      rect(x + offset + .035, z + d + .22, .15, .065, bay)
+    }
+    label(station.kind === 'calibration' ? 'B-01' : station.kind === 'sampling' ? 'C-02' : 'Q-03',
+      station.x - .53, z + d + .44, 1, '#889291')
+  }
 
   const texture = new CanvasTexture(canvas)
   texture.colorSpace = SRGBColorSpace
@@ -451,6 +481,78 @@ export function createWorkshop(): Group {
   crate(12.9, 10.17, 0.75, paint.steel)
   box(0, 0.085, 9.77, 26.9, 0.17, 0.26, paint.shadow)
   box(0, 0.19, 9.77, 26.9, 0.055, 0.12, paint.steel)
+
+  // Separate working islands. Their outlines match the footprints used by the simulation.
+  for (const { kind, x, z, width: w, depth: d } of STATIONS) {
+    box(x, .091, z, w, .18, d, paint.dark)
+    box(x, .208, z, w - .16, .092, d - .18, paint.rim)
+    for (const end of [-1, 1]) {
+      const leg = x + end * (w / 2 - .25)
+      box(leg, .46, z, .265, .52, d - .31, paint.frame)
+      box(leg, .44, z + d * .37, .116, .29, .069, paint.steel)
+      box(leg, .271, z + d * .40, .306, .053, .075, paint.brass)
+    }
+    if (kind === 'calibration') {
+      box(x, .692, z, w - .26, .211, d - .20, paint.teal)
+      box(x, .847, z, w - .08, .13, d - .079, paint.lightSteel)
+      box(x, .927, z - .035, w - .27, .044, d - .30, paint.steel)
+      box(x, .886, z + d * .44, w - .22, .157, .10, paint.shadow)
+      for (const dx of [-.73, .15, 1.03]) {
+        box(x + dx, .695, z + d * .44, .65, .218, .082, paint.shadow)
+        box(x + dx, .723, z + d * .48, .216, .047, .05, paint.rim)
+      }
+      // Reference block, two jaws, traverse screw and its handwheel.
+      box(x - .47, .957, z - .16, 1.41, .066, .63, paint.rubber)
+      box(x - .50, 1.029, z - .16, 1.17, .10, .51, paint.rim)
+      for (const dx of [-.86, -.13]) {
+        box(x + dx, 1.123, z - .16, .167, .212, .49, paint.shadow)
+        box(x + dx, 1.227, z - .151, .194, .061, .45, paint.lightSteel)
+      }
+      cylinder(x - .51, 1.049, z + .119, .121, 1.56, paint.rim, 'x')
+      cylinder(x + .29, 1.049, z + .119, .273, .14, paint.copper, 'x')
+      box(x - .49, 1.105, z - .17, .326, .146, .316, paint.brass)
+      box(x + .98, .996, z + .101, .48, .10, .33, paint.dark)
+      box(x + .98, 1.045, z + .101, .332, .041, .22, '#698e82')
+      box(x + 1.11, 1.071, z + .101, .05, .015, .15, paint.lamp)
+    } else if (kind === 'sampling') {
+      box(x, .687, z, w - .13, .184, d - .12, paint.shadow)
+      box(x, .801, z, w - .30, .10, d * .72, paint.oil)
+      for (let offset = -w / 2 + .29; offset < w / 2 - .23; offset += .27) {
+        cylinder(x + offset, .882, z, .152, d * .72, paint.steel, 'z')
+        cylinder(x + offset, .882, z + d * .30, .172, .052, paint.frame, 'z')
+      }
+      box(x, .935, z - d * .43, w - .12, .134, .154, paint.rim)
+      box(x, .923, z + d * .43, w - .12, .13, .160, paint.steel)
+      stripe(x, .997, z + d * .423, w - .22, 'x')
+      for (const dx of [-.61, .43]) {
+        cylinder(x + dx, 1.008, z - .039, .43, .128, paint.rim, 'y')
+        cylinder(x + dx, 1.076, z - .039, .233, .038, paint.oil, 'y')
+        box(x + dx + .153, 1.077, z - .091, .062, .038, .13, paint.copper)
+      }
+      box(x - w * .38, .587, z + d * .48, .36, .155, .064, paint.rubber)
+      box(x - w * .39, .608, z + d * .51, .098, .05, .04, paint.lamp)
+    } else {
+      box(x, .653, z, w - .17, .091, d - .14, paint.brass)
+      for (const dx of [-w * .40, w * .40]) {
+        for (const dz of [-d * .40, d * .40]) {
+          box(x + dx, .772, z + dz, .141, 1.14, .151, paint.frame)
+          box(x + dx, 1.31, z + dz, .175, .128, .19, paint.copper)
+        }
+      }
+      box(x, 1.18, z - d * .39, w * .84, .129, .126, paint.brass)
+      for (const dz of [-d * .4, d * .4]) {
+        box(x, .73, z + dz, w * .87, .091, .121, paint.yellow)
+      }
+      crate(x - .48, z - .023, .84, '#4f6869')
+      crate(x + .43, z - .037, .88, '#626460')
+      box(x - .48, .634, z - .023, .64, .217, .53, '#496062')
+      box(x + .43, .654, z - .037, .70, .25, .52, '#5a5650')
+      box(x - .48, .766, z - .023, .74, .059, .61, paint.steel)
+      box(x + .43, .796, z - .037, .77, .059, .58, paint.brass)
+      box(x - .48, .661, z + .253, .168, .065, .036, paint.lightSteel)
+      box(x + .43, .685, z + .234, .168, .065, .036, paint.lightSteel)
+    }
+  }
 
   workshop.add(
     buildBatch(new BoxGeometry(1, 1, 1), boxes),

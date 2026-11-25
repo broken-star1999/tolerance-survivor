@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
 import {
   BOSS_TICK, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, Signal, advanceRun, attackInterval,
   chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, previewToolStats, waveCount, waveCycleTicks, waveGapDegrees,
@@ -291,4 +292,63 @@ test('the calibrated file delivers the higher previewed damage in four strokes',
   for (let i = 0; i < 36; i++) advanceRun(run, IDLE_INPUT)
   assert.equal(part.fileHits, 0)
   assert.ok(Math.abs(part.hp - (250 - expected)) < .0001)
+})
+
+test('a workstation stops a dash and lets a diagonal move slide along its face', () => {
+  const run = createRun(19)
+  emptyFloor(run)
+  const bench = STATIONS[0]
+  const edge = bench.x - bench.width / 2 - PLAYER_CLEARANCE
+  run.player.x = edge - .42
+  run.player.z = bench.z
+  advanceRun(run, { x: 1, z: 0, dash: true, accept: false })
+  for (let tick = 0; tick < 15; tick++) advanceRun(run, IDLE_INPUT)
+  assert.ok(run.player.x <= edge && run.player.x > edge - .02)
+  assert.equal(run.player.z, bench.z)
+  for (let tick = 0; tick < 16; tick++) advanceRun(run, { x: 1, z: 1, dash: false, accept: false })
+  assert.ok(run.player.z > bench.z + .8)
+  assert.ok(isOpenFloor(run.player.x, run.player.z, PLAYER_CLEARANCE))
+})
+
+test('separated chasers route around a bench from a blocked approach', () => {
+  const run = createRun(74)
+  const bench = STATIONS[1]
+  emptyFloor(run)
+  run.player.x = bench.x
+  run.player.z = bench.z + 2.1
+  run.player.protectedUntil = Infinity
+  const enemies = run.enemies.slice(0, 3)
+  for (const enemy of enemies) {
+    Object.assign(enemy, { active: true, kind: 'blank', x: bench.x, z: bench.z - 1.85, radius: .4, speed: 2.3, hp: 40 })
+  }
+  for (let tick = 0; tick < 35; tick++) advanceRun(run, IDLE_INPUT)
+  assert.ok(Math.hypot(enemies[2].x - enemies[0].x, enemies[2].z - enemies[0].z) > .27)
+  for (let tick = 0; tick < 345; tick++) {
+    advanceRun(run, IDLE_INPUT)
+    assert.ok(enemies.every(enemy => isOpenFloor(enemy.x, enemy.z, enemy.radius)))
+  }
+  assert.ok(enemies.every(enemy => enemy.z > bench.z + bench.depth / 2))
+  assert.ok(enemies.some(enemy => Math.hypot(enemy.x - run.player.x, enemy.z - run.player.z) < 1.15))
+})
+
+test('a blocked charge recovers and a projectile is intercepted by the same station', () => {
+  const run = createRun(74)
+  emptyFloor(run)
+  const bench = STATIONS[0]
+  const edge = bench.x - bench.width / 2
+  run.player.x = bench.x + 2.75
+  run.player.z = bench.z
+  const enemy = run.enemies[0]
+  Object.assign(enemy, {
+    active: true, kind: 'bolt', x: edge - .76, z: bench.z, radius: .53, speed: 1.6,
+    hp: 44, mode: 2, dx: 1, dz: 0, until: 34,
+  })
+  const shot = run.projectiles[0]
+  Object.assign(shot, { active: true, x: edge - .24, z: bench.z + .2, dx: 1, dz: 0 })
+  for (let tick = 0; tick < 8; tick++) advanceRun(run, IDLE_INPUT)
+  assert.equal(enemy.mode, 3)
+  assert.ok(enemy.x <= edge - enemy.radius)
+  assert.equal(shot.active, false)
+  assert.equal(run.player.hp, 100)
+  assert.equal(run.effects.filter(effect => effect.kind === 'impact' && effect.until > run.tick).length, 2)
 })
