@@ -11,12 +11,13 @@ type Dimensions = readonly [number, number, number]
 const iron = '#253341'
 const rubber = '#18232e'
 const alloy = '#94a9b1'
-const teal = '#277076'
-const suit = '#397f81'
-const warm = '#b87343'
-const yellow = '#edac3d'
-const highlight = '#f7d681'
-const reflective = '#b9ddbf'
+const teal = '#236261'
+const suit = '#2f8c83'
+const warm = '#bb6746'
+const yellow = '#e18a4b'
+const highlight = '#f3d087'
+const reflective = '#e2d6a8'
+const enamel = '#faf1d8'
 
 // Parts attached to the same joint are merged into a single, vertex-coloured mesh.
 function parts() {
@@ -75,10 +76,13 @@ export function createInspector() {
   uniform.box([0, .819, .238], [.56, .058, .03], reflective, .005)
   uniform.box([0, .838, -.238], [.55, .054, .03], reflective, .007)
   uniform.box([-.105, .975, .245], [.123, .116, .046], '#285962', .014)
-  uniform.box([.102, 1.013, .239], [.115, .076, .024], alloy, .008)
-  uniform.box([.102, 1.025, .254], [.062, .018, .012], '#e3e9cc')
-  uniform.box([0, .989, -.246], [.236, .143, .035], '#225761', .019)
-  uniform.box([0, .991, -.270], [.134, .027, .012], '#82a99b')
+  uniform.box([.109, 1.013, .239], [.131, .094, .03], enamel, .012)
+  uniform.box([.109, 1.020, .258], [.084, .025, .012], '#4b655b')
+  uniform.box([0, .985, -.246], [.29, .196, .064], '#154956', .025)
+  uniform.box([0, 1.002, -.287], [.211, .086, .028], enamel, .01)
+  for (const x of [-.066, -.022, .022, .066]) {
+    uniform.box([x, .996, -.306], [.015, .043, .014], '#576d68')
+  }
   uniform.box([0, 1.213, 0], [.225, .12, .21], '#aa6648', .023)
   center.add(uniform.finish(surface))
 
@@ -99,13 +103,13 @@ export function createInspector() {
   }
   shell.box([0, .12, .263], [.093, .088, .088], '#e0a977', .022)
   shell.box([.028, .054, .239], [.107, .023, .027], '#894d40', .008)
-  shell.crown([0, .323, -.007], [.351, .265, .292], yellow)
-  shell.box([0, .321, -.004], [.666, .071, .545], warm, .029)
-  shell.box([0, .343, .132], [.713, .047, .352], highlight, .022)
-  shell.box([0, .340, .257], [.670, .040, .200], yellow, .016)
-  shell.box([0, .535, -.022], [.082, .084, .31], '#efc464', .035)
-  shell.box([0, .385, .280], [.123, .072, .031], '#bd642e', .01)
-  shell.box([0, .394, .298], [.085, .036, .018], '#fcdb8a', .007)
+  shell.crown([0, .327, -.007], [.367, .269, .306], '#edcd94')
+  shell.box([0, .323, -.004], [.698, .071, .565], warm, .029)
+  shell.box([0, .351, .132], [.742, .042, .37], enamel, .022)
+  shell.box([0, .344, .268], [.697, .041, .20], highlight, .016)
+  shell.box([0, .532, -.016], [.091, .093, .339], '#dd8356', .035)
+  shell.box([0, .417, .284], [.141, .093, .043], '#b96c4e', .017)
+  shell.box([0, .428, .312], [.086, .043, .018], enamel, .009)
   head.add(shell.finish(surface))
   center.add(head)
 
@@ -143,7 +147,7 @@ export function createInspector() {
   const leftLeg = leg(-1)
   const rightLeg = leg(1)
   const tool = parts()
-  tool.box([0, 0, 0], [.375, .051, .056], alloy, .006)
+  tool.box([0, 0, 0], [.42, .058, .056], alloy, .006)
   tool.box([-.138, -.053, 0], [.069, .143, .056], '#c8d7d5', .008)
   tool.box([-.099, -.111, 0], [.092, .040, .056], alloy, .007)
   tool.box([.077, -.038, 0], [.062, .110, .052], alloy, .006)
@@ -153,6 +157,7 @@ export function createInspector() {
   const caliper = tool.finish(surface)
   caliper.position.set(.018, -.394, .147)
   caliper.rotation.z = -.21
+  caliper.scale.setScalar(1.17)
   rightArm.add(caliper)
 
   function pose(time: number, moving: boolean, dashing: boolean, measuring: number, equipped: boolean, hit: number) {
@@ -182,7 +187,7 @@ export function createTestRig() {
 
   const feet = parts()
   feet.box([0, .211, 0], [3.42, .36, 1.87], '#263b45', .12)
-  feet.box([0, .457, .03], [3.11, .242, 1.58], '#587782', .069)
+  feet.box([0, .457, .03], [3.11, .242, 1.58], '#758286', .069)
   for (const side of [-1, 1]) {
     const x = side * 1.25
     feet.box([x, .203, .425], [.59, .35, 1.71], rubber, .097)
@@ -201,57 +206,70 @@ export function createTestRig() {
   housing.rotation.y = -.19
   group.add(housing)
   const caseParts = parts()
-  caseParts.box([0, .983, -.07], [2.76, 2.02, 1.31], '#356068', .145)
-  caseParts.box([0, 1.921, -.064], [2.52, .20, 1.22], '#63808b', .051)
-  caseParts.box([0, -.037, .066], [2.56, .19, 1.39], '#20323b', .054)
-  for (const x of [-1.24, 1.24]) {
-    caseParts.box([x, .968, .554], [.276, 1.612, .23], '#427985', .051)
-    caseParts.box([x, 1.055, .681], [.17, .879, .070], '#1e333d', .028)
-    for (let slot = 0; slot < 5; slot++) {
-      caseParts.box([x, .703 + slot * .143, .726], [.117, .045, .037], '#7b9798', .008)
-    }
-    caseParts.cylinder([x, 2.073, -.02], .130, .205, .187, 8, iron)
-    caseParts.box([x, .329, .693], [.17, .087, .07], yellow, .013)
+  caseParts.box([0, .983, -.26], [2.70, 1.94, .94], '#3c3f4b', .13)
+  caseParts.box([0, 1.95, -.06], [2.66, .28, 1.38], '#bd6448', .078)
+  caseParts.box([0, 2.11, -.09], [2.52, .12, 1.23], '#d27751', .041)
+  caseParts.box([0, .22, .19], [2.57, .24, 1.43], '#d0ad7a', .054)
+  caseParts.box([0, -.037, .066], [2.63, .21, 1.46], '#42343b', .054)
+  for (let slot = -4; slot <= 4; slot++) {
+    caseParts.box([slot * .255, .229, .918], [.106, .121, .039], slot % 2 ? '#634c44' : '#efbf72', .008)
   }
-  caseParts.cylinder([0, 1.074, .586], 1.043, 1.080, .290, 10, iron, true)
-  caseParts.cylinder([0, 1.074, .746], .989, 1.010, .170, 10, alloy, true)
-  caseParts.cylinder([0, 1.074, .845], .867, .894, .155, 10, '#46525a', true)
-  caseParts.cylinder([0, 1.074, .934], .777, .795, .137, 10, '#1d3239', true)
+  for (const x of [-1.24, 1.24]) {
+    caseParts.box([x, 1.11, .22], [.364, 1.62, .73], '#b98158', .052)
+    caseParts.box([x, 1.14, .61], [.233, 1.43, .10], '#e0b47c', .028)
+    caseParts.box([x, 1.09, .672], [.131, 1.16, .045], '#665248', .012)
+    for (const y of [.665, 1.07, 1.475]) {
+      caseParts.box([x, y, .703], [.099, .041, .046], '#f8d797', .008)
+    }
+    caseParts.cylinder([x, 2.20, -.02], .130, .205, .187, 8, iron)
+  }
+  caseParts.cylinder([0, .97, .30], .875, .914, .30, 10, iron, true)
+  caseParts.cylinder([0, .97, .45], .829, .88, .16, 10, '#95928e', true)
+  caseParts.cylinder([0, .97, .55], .711, .746, .143, 10, '#5c5a62', true)
+  caseParts.cylinder([0, .97, .64], .643, .673, .133, 10, '#2c2634', true)
   for (let index = 0; index < 10; index++) {
     const angle = index * Math.PI / 5
-    caseParts.cylinder([.914 * Math.cos(angle), 1.074 + .914 * Math.sin(angle), .851], .054, .055, .104, 6, '#324c55', true)
+    caseParts.cylinder([.786 * Math.cos(angle), .97 + .786 * Math.sin(angle), .567], .048, .052, .081, 6, '#393946', true)
   }
-  caseParts.box([0, .117, .805], [.693, .114, .075], rubber, .02)
-  caseParts.box([0, .119, .855], [.405, .037, .02], '#80b4ac', .006)
   housing.add(caseParts.finish(surface))
 
   const rotor = new Group()
-  rotor.position.set(0, 1.074, 1.009)
+  rotor.position.set(0, .97, .704)
   const wheel = parts()
-  wheel.cylinder([0, 0, 0], .657, .696, .12, 8, '#9b553e', true)
-  wheel.cylinder([0, 0, .068], .577, .603, .082, 8, '#542f2b', true)
+  wheel.cylinder([0, 0, 0], .576, .612, .112, 8, '#9b553e', true)
+  wheel.cylinder([0, 0, .068], .508, .531, .082, 8, '#592d36', true)
   for (let index = 0; index < 8; index++) {
     const angle = index * Math.PI * .25
-    wheel.cylinder([.560 * Math.cos(angle), .560 * Math.sin(angle), .109], .077, .093, .091, 6,
+    wheel.cylinder([.472 * Math.cos(angle), .472 * Math.sin(angle), .109], .071, .083, .076, 6,
       index % 2 ? '#de8b53' : '#b36d48', true)
   }
   wheel.cylinder([0, 0, .14], .297, .315, .119, 8, '#22313b', true)
   rotor.add(wheel.finish(surface))
   housing.add(rotor)
 
+  const ram = new Group()
+  const ramParts = parts()
+  ramParts.cylinder([0, .03, .76], .13, .163, .93, 8, '#adaca5')
+  ramParts.box([0, .254, .76], [.38, .30, .45], '#985840', .037)
+  ramParts.box([0, -.295, .78], [.78, .17, .54], '#ae614b', .040)
+  ramParts.box([0, -.39, .78], [.94, .10, .64], '#dfb17e', .034)
+  ram.add(ramParts.finish(surface))
+  housing.add(ram)
+
   const signalMaterial = new MeshBasicMaterial({ vertexColors: true, color: '#f8b06a' })
   const lights = parts()
-  lights.cylinder([0, 1.074, 1.226], .194, .235, .09, 8, '#ffe4bf', true)
-  lights.cylinder([0, 1.074, 1.283], .081, .131, .040, 8, '#fff3d1', true)
+  lights.cylinder([0, .97, .925], .177, .215, .081, 8, '#ffe4bf', true)
+  lights.cylinder([0, .97, .98], .076, .114, .039, 8, '#fff3d1', true)
   for (const x of [-1.24, 1.24]) {
-    lights.cylinder([x, 2.224, -.020], .115, .133, .191, 8, '#ffac7b')
+    lights.cylinder([x, 2.346, -.020], .115, .133, .191, 8, '#ffc58d')
   }
   housing.add(lights.finish(signalMaterial))
 
-  function pose(time: number, charging: boolean, hit: number) {
+  function pose(time: number, charging: boolean, hit: number, ramTravel: number) {
     rotor.rotation.z = time * 1.1 + (charging ? Math.sin(time * 20) * .30 : 0)
     housing.position.y = .97 + Math.sin(time * (charging ? 14 : 4.9)) * (charging ? .039 : .021)
     housing.rotation.y = -.19 + Math.sin(time * 1.12) * .075
+    ram.position.y = 1.92 - ramTravel * .66
     signalMaterial.color.set(charging ? '#ffe2a6' : '#e08d59')
     surface.emissive.setRGB(hit * .16, hit * .055, hit * .020)
   }

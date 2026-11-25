@@ -1,7 +1,8 @@
 import {
-  BOSS_HP, CALIBRATIONS, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS, Signal, UPGRADES,
+  BOSS_HP, CALIBRATIONS, DASH_BUFFER, DASH_COOLDOWN, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS,
+  SURGES, Signal, UPGRADES,
   WEAPON_IDS, WEAPON_SLOTS, advanceRun, chooseUpgrade, previewToolStats,
-  createPracticeRun, createRun, hazardValue, isWeapon, nearestShortcut, nearestTool, waveCount, waveGapDegrees, weaponCount,
+  createPracticeRun, createRun, hazardValue, isWeapon, nearestShortcut, nearestTool, surgeGroupAt, waveCount, waveGapDegrees, weaponCount,
   type Input, type Run,
 } from './simulation.hot.ts'
 import { createSound } from './sound.ts'
@@ -136,8 +137,8 @@ export function createApplication() {
   const movementCodes = new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'])
   const codeToOption: Record<string, number> = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }
 
-  function clearControls() {
-    held.clear()
+  function clearControls(keepMovement = false) {
+    if (!keepMovement) held.clear()
     dashQueued = false
     acceptQueued = false
     touchX = 0
@@ -148,6 +149,7 @@ export function createApplication() {
     stick.style.transform = ''
     floatingStick.style.transform = ''
     floatingJoystick.hidden = true
+    if (run) run.player.dashBufferedUntil = -1
   }
 
   function note(title: string, detail: string, ticks = 132, warning = false) {
@@ -164,6 +166,7 @@ export function createApplication() {
     const hp = String(Math.ceil(run.player.hp))
     const maximum = String(run.player.maximumHp)
     const isBoss = run.phase === 'boss'
+    hud.classList.toggle('low-health', run.player.hp <= run.player.maximumHp * .27)
     text(healthValue, hp + ' / ' + maximum)
     if (healthMeter.getAttribute('aria-valuenow') !== hp) healthMeter.setAttribute('aria-valuenow', hp)
     if (healthMeter.getAttribute('aria-valuemax') !== maximum) healthMeter.setAttribute('aria-valuemax', maximum)
@@ -176,7 +179,10 @@ export function createApplication() {
     stage.classList.toggle('boss-active', isBoss)
     bossMeter.hidden = !isBoss
     if (isBoss) {
-      text(waveInfo, waveCount(run) + ' 道波 · 缺口 ' + waveGapDegrees(run) + '°')
+      const press = run.boss.press
+      bossMeter.classList.toggle('press-active', !!press)
+      text(waveInfo, press ? run.tick < press.strikesAt ? '压头落区 · 离开标线' : '压头回升' :
+        waveCount(run) + ' 道波 · 缺口 ' + waveGapDegrees(run) + '°')
       meter(bossFill, run.boss.hp / BOSS_HP)
     }
     if (run.tick >= toastUntil) toast.hidden = true
@@ -187,10 +193,12 @@ export function createApplication() {
     const boost = Math.ceil(Math.max(0, run.boostUntil - run.tick) / HZ)
     text(weaponStatus, boost > 0 ? '攻速 ×2 · ' + boost + ' 秒' : weaponCount(run) > 0 ? '自动测量' : '拾取地上的卡尺')
     const dashDelay = Math.max(0, run.player.dashReadyAt - run.tick)
-    text(dashText, dashDelay > 0 ? '冲刺恢复' : '冲刺就绪')
-    meter(dashFill, 1 - dashDelay / 78)
+    text(dashText, dashDelay === 0 ? '冲刺就绪' :
+      run.player.dashBufferedUntil >= run.tick ? '冲刺已预备' : '冲刺恢复')
+    meter(dashFill, 1 - dashDelay / DASH_COOLDOWN)
     const activeIncident = run.phase === 'floor' ? run.incident : null
-    incidentPanel.hidden = !activeIncident || !!lesson || run.choices.length > 0 || paused
+    const surge = run.phase === 'floor' ? run.surge : null
+    incidentPanel.hidden = (!activeIncident && !surge) || !!lesson || run.choices.length > 0 || paused
     stage.classList.toggle('incident-active', !incidentPanel.hidden)
     if (activeIncident) {
       const warning = activeIncident.stage === 'warning'
@@ -199,6 +207,13 @@ export function createApplication() {
       text(incidentTime, Math.ceil(((warning ? activeIncident.opensAt : activeIncident.closesAt) - run.tick) / HZ) + ' 秒')
       text(incidentDetail, warning ? profile.detail : '黄色捷径立即处理 · 绿色复检圈需停留 1.6 秒')
       incidentPanel.dataset.stage = activeIncident.stage
+    } else if (surge) {
+      const profile = SURGES[surge.slot]
+      const next = surgeGroupAt(surge, surge.issued)
+      text(incidentTitle, profile.title)
+      text(incidentTime, surge.issued === surge.groups.length ? '入场中' : Math.ceil((next - run.tick) / HZ) + ' 秒')
+      text(incidentDetail, profile.detail)
+      incidentPanel.dataset.stage = 'surge'
     }
     const station = activeIncident?.stage === 'open' ? activeIncident.inspection : null
     const shortcut = run.phase === 'floor' ? nearestShortcut(run) : undefined
@@ -231,7 +246,7 @@ export function createApplication() {
     toolCard.hidden = !tool || Boolean(run.choices.length) || paused || !!shortcut || !inspectionCard.hidden || run.phase === 'ended'
     if (tool) text(toolName, UPGRADES[tool.kind].name)
     touchAccept.disabled = !ready
-    touchDash.disabled = dashDelay > 0
+    touchDash.disabled = dashDelay > DASH_BUFFER
   }
 
   function updateGear() {
@@ -360,7 +375,7 @@ export function createApplication() {
 
   function showUpgrades() {
     if (!run) return
-    clearControls()
+    clearControls(true)
     accumulator = 0
     workstation.dataset.mode = 'upgrade'
     upgradeScreen.hidden = false
@@ -374,8 +389,8 @@ export function createApplication() {
       button.type = 'button'
       button.className = 'upgrade-choice'
       const image = document.createElement('canvas')
-      image.width = 40
-      image.height = 40
+      image.width = 48
+      image.height = 48
       image.setAttribute('aria-hidden', 'true')
       view.icon(image, definition.sprite as SpriteName)
       const key = document.createElement('kbd')
@@ -383,11 +398,12 @@ export function createApplication() {
       const name = document.createElement('strong')
       name.textContent = definition.name
       const details = document.createElement('span')
+      details.className = 'item-description'
       details.textContent = definition.detail
       const rank = document.createElement('span')
+      rank.className = 'item-rank'
       const equipment = id === 'caliper' || isWeapon(id)
       if (equipment) {
-        rank.className = 'item-rank'
         rank.textContent = 'Lv.' + run.ranks[id] + ' → Lv.' + (run.ranks[id] + 1)
       } else {
         rank.textContent = '第 ' + (run.ranks[id] + 1) + ' 级'
@@ -401,8 +417,8 @@ export function createApplication() {
         stats.className = 'item-stats'
         for (const [label, value] of [
           ['伤害', from.damage + ' → ' + to.damage],
-          ['间隔', from.interval.toFixed(2) + ' → ' + to.interval.toFixed(2) + ' 秒'],
-          ['量程', from.reach.toFixed(1) + ' → ' + to.reach.toFixed(1) + ' 米'],
+          ['间隔 · 秒', from.interval.toFixed(2) + ' → ' + to.interval.toFixed(2)],
+          ['量程 · 米', from.reach.toFixed(1) + ' → ' + to.reach.toFixed(1)],
         ]) {
           const field = document.createElement('span')
           const caption = document.createElement('span')
@@ -432,7 +448,7 @@ export function createApplication() {
     if (!lesson && (selected === 'caliper' || isWeapon(selected)) && run.ranks[selected] === 3) {
       note(UPGRADES[selected].name + ' · Lv.3 校准', CALIBRATIONS[selected], 162)
     }
-    clearControls()
+    clearControls(true)
     upgradeScreen.hidden = true
     touch.hidden = false
     workstation.dataset.mode = lesson ? 'training' : run.phase
@@ -534,6 +550,8 @@ export function createApplication() {
 
     if (signal & Signal.incidentWarning) sound.play('wave')
     if (signal & Signal.offer) sound.play('hit')
+    if (signal & Signal.surgeWarning) sound.play('wave')
+    if (signal & Signal.surgeArrival) sound.play('hit')
     if (signal & Signal.inspection) {
       const record = run.inspections[run.inspections.length - 1]
       note('复检完成', '隔离 ' + record.isolated + ' 件' + (record.recovery > 0 ? ' · 生命 +' + record.recovery : ' · 合规留档'), 150)
@@ -548,11 +566,13 @@ export function createApplication() {
     }
     if (signal & Signal.boss) {
       workstation.dataset.mode = 'boss'
-      note('失稳试验台启动', '冲击波有缺口。沿地面绿色指示移动。', 235, true)
+      note('失稳试验台启动', '沿绿色缺口避开冲击波。', 144, true)
       sound.setMode('boss')
       sound.play('boss')
     }
     if (signal & Signal.wave) sound.play('wave')
+    if (signal & Signal.pressWarning) sound.play('wave')
+    if (signal & Signal.pressImpact) sound.play('boss')
     if (signal & Signal.level) {
       sound.play('level')
       showUpgrades()
@@ -650,6 +670,11 @@ export function createApplication() {
       return
     }
     if (paused) return
+    if (movementCodes.has(event.code)) {
+      event.preventDefault()
+      held.add(event.code)
+      return
+    }
     if (run.choices.length) {
       const option = codeToOption[event.code]
       if (option !== undefined && !event.repeat) {
@@ -658,10 +683,7 @@ export function createApplication() {
       }
       return
     }
-    if (movementCodes.has(event.code)) {
-      event.preventDefault()
-      held.add(event.code)
-    } else if (event.code === 'Space') {
+    if (event.code === 'Space') {
       event.preventDefault()
       if (!event.repeat) dashQueued = true
     } else if (event.code === 'KeyE') {
@@ -670,7 +692,7 @@ export function createApplication() {
     }
   })
   window.addEventListener('keyup', event => held.delete(event.code))
-  window.addEventListener('blur', clearControls)
+  window.addEventListener('blur', () => clearControls())
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') setPaused(true)
   })
@@ -678,9 +700,11 @@ export function createApplication() {
   function moveStick(event: PointerEvent) {
     const dx = event.clientX - stickOriginX
     const dz = event.clientY - stickOriginZ
-    const scale = Math.min(1, stickRadius / Math.max(1, Math.hypot(dx, dz)))
-    touchX = dx * scale / stickRadius
-    touchZ = dz * scale / stickRadius
+    const distance = Math.hypot(dx, dz)
+    const scale = Math.min(1, stickRadius / Math.max(1, distance))
+    const strength = Math.max(0, Math.min(1, (distance - 4) / (stickRadius - 4)))
+    touchX = dx / Math.max(1, distance) * strength
+    touchZ = dz / Math.max(1, distance) * strength
     const visual = dragAnywhere ? floatingStick : stick
     visual.style.transform = 'translate(' + dx * scale + 'px,' + dz * scale + 'px)'
   }

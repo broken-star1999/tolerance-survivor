@@ -24,23 +24,23 @@ const ARENA_Z = ARENA.z
 const quarterTurn = Math.PI / 2
 
 const paint = {
-  dark: '#151f27',
-  frame: '#323f4c',
-  steel: '#596c74',
-  rim: '#76868a',
-  lightSteel: '#a6b3a7',
-  shadow: '#223139',
-  teal: '#38676a',
-  wornTeal: '#547577',
-  yellow: '#c19756',
-  amber: '#f1b86d',
-  hot: '#f68854',
-  mint: '#91e6bb',
-  oil: '#16272d',
-  copper: '#9a6245',
-  brass: '#a38a64',
-  lamp: '#e8c69a',
-  rubber: '#293035',
+  dark: '#201e2a',
+  frame: '#414453',
+  steel: '#68737b',
+  rim: '#959791',
+  lightSteel: '#c5c6ae',
+  shadow: '#2d303c',
+  teal: '#356a68',
+  wornTeal: '#4c7770',
+  yellow: '#d89a56',
+  amber: '#ffd58d',
+  hot: '#f78960',
+  mint: '#9ee8c2',
+  oil: '#1d2632',
+  copper: '#a86350',
+  brass: '#b78959',
+  lamp: '#ffe3b1',
+  rubber: '#332d38',
 } as const
 
 interface Part {
@@ -88,8 +88,8 @@ function makeFloorTexture(): CanvasTexture {
     return seed / 4294967296
   }
 
-  const slabs = ['#293c45', '#2b3f48', '#2d424c', '#30434b', '#2c4148', '#2c4148']
-  ctx.fillStyle = '#1e2e37'
+  const slabs = ['#343442', '#393847', '#373747', '#3a3947', '#383744', '#353643']
+  ctx.fillStyle = '#292a38'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   const tile = FLOOR_SCALE * 2
 
@@ -97,25 +97,25 @@ function makeFloorTexture(): CanvasTexture {
     for (let x = 0; x < canvas.width; x += tile) {
       ctx.fillStyle = slabs[Math.floor(random() * slabs.length)]
       ctx.fillRect(x + 1, y + 1, tile - 2, tile - 2)
-      ctx.fillStyle = '#3b4c53'
+      ctx.fillStyle = '#464352'
       ctx.fillRect(x + 2, y + 1, tile - 4, 1)
       ctx.fillRect(x + 1, y + 3, 1, tile - 6)
-      ctx.fillStyle = '#243740'
+      ctx.fillStyle = '#2e2f3e'
       ctx.fillRect(x + 2, y + tile - 3, tile - 4, 1)
       for (let i = 0; i < 9; i++) {
         const ox = x + 4 + Math.floor(random() * (tile - 13))
         const oy = y + 4 + Math.floor(random() * (tile - 8))
-        ctx.fillStyle = i % 2 ? '#344751' : '#283b43'
+        ctx.fillStyle = i % 2 ? '#41404d' : '#333441'
         ctx.fillRect(ox, oy, i === 0 ? 7 : i === 1 ? 4 : 2, 1)
       }
       if (random() > 0.73) {
-        ctx.fillStyle = '#22323a'
+        ctx.fillStyle = '#2b303c'
         ctx.fillRect(x + 5, y + 5, 4, 3)
-        ctx.fillStyle = '#526061'
+        ctx.fillStyle = '#5b5360'
         ctx.fillRect(x + 6, y + 5, 2, 1)
       }
       if (random() > 0.86) {
-        ctx.fillStyle = '#5a534b'
+        ctx.fillStyle = '#655156'
         const edge = x + tile - 11
         ctx.fillRect(edge, y + 4, 7, 1)
         ctx.fillRect(edge + 2, y + 5, 3, 1)
@@ -124,18 +124,18 @@ function makeFloorTexture(): CanvasTexture {
   }
 
   // Recessed equipment pads sit outside the walkable rectangle.
-  rect(-19, -13.6, 38, 3.85, '#23333c')
-  rect(-18.7, -13.35, 37.4, 0.12, '#39515b')
-  rect(-19, -9.58, 38, 0.24, '#16252f')
-  rect(-18.5, 9.52, 37, 0.43, '#22353f')
-  rect(-17.7, 9.56, 35.4, 0.15, '#495d66')
+  rect(-19, -13.6, 38, 3.85, '#2b303b')
+  rect(-18.7, -13.35, 37.4, 0.12, '#474b58')
+  rect(-19, -9.58, 38, 0.24, '#21232d')
+  rect(-18.5, 9.52, 37, 0.43, '#2b343e')
+  rect(-17.7, 9.56, 35.4, 0.15, '#505761')
 
-  // Wide, low-contrast pools from the inspection lamps. The center stays quieter than the perimeter.
+  // Amber pools mark the work bays. Cooler light separates the moving floor traffic from the equipment.
   for (const [x, z, radius, squash, tint] of [
-    [-9.0, -9.2, 7.4, .53, 'rgba(221,155,85,.18)'],
-    [7.2, -9.3, 8.7, .60, 'rgba(245,190,125,.21)'],
-    [-12.8, 3.4, 6.4, 1.08, 'rgba(102,164,203,.12)'],
-    [11.6, 5.0, 6.7, .91, 'rgba(114,174,177,.13)'],
+    [-9.0, -7.7, 7.8, .63, 'rgba(234,156,100,.26)'],
+    [7.2, -7.4, 9.7, .78, 'rgba(255,174,107,.32)'],
+    [-11.4, 4.6, 7.9, .95, 'rgba(77,164,159,.22)'],
+    [7.5, 4.25, 7.3, .82, 'rgba(177,112,83,.19)'],
   ] as const) {
     ctx.save()
     ctx.translate(worldX(x), worldZ(z))
@@ -167,19 +167,28 @@ function makeFloorTexture(): CanvasTexture {
     }
   }
 
-  // A thin, worn caution border makes the playable footprint visible.
+  // Recessed stripes and chevrons separate the walkable floor from the side channels.
   for (const z of [-ARENA_Z - 0.30, ARENA_Z + 0.08]) {
-    rect(-ARENA_X - 0.15, z, (ARENA_X + 0.15) * 2, 0.24, '#333c3a')
+    rect(-ARENA_X - 0.15, z, (ARENA_X + 0.15) * 2, 0.25, '#393339')
     for (let x = -ARENA_X; x < ARENA_X; x += 0.74) {
-      rect(x, z + 0.03, 0.36, 0.15, '#a28456')
-      rect(x + 0.36, z + 0.06, 0.11, 0.10, '#78664d')
-      rect(x + 0.04, z + 0.03, 0.17, 0.04, '#b39969')
+      rect(x, z + 0.03, 0.36, 0.15, '#b48b64')
+      rect(x + 0.36, z + 0.06, 0.11, 0.10, '#88664f')
+      rect(x + 0.04, z + 0.03, 0.17, 0.04, '#c9a378')
     }
   }
   for (const x of [-ARENA_X - 0.20, ARENA_X + 0.08]) {
     rect(x, -ARENA_Z, 0.13, ARENA_Z * 2, '#6a6950')
     for (let z = -ARENA_Z + 0.3; z < ARENA_Z; z += 1.09) {
       rect(x, z, 0.13, 0.26, '#92774e')
+    }
+  }
+  for (const side of [-1, 1]) {
+    const x = side * (ARENA_X - .46)
+    for (const z of [-5.64, .47, 6.3]) {
+      for (let step = 0; step < 4; step++) {
+        rect(x + side * step * .065, z - step * .095, .11, .10, '#8f6e58')
+        rect(x + side * step * .065, z + step * .095, .11, .10, '#8f6e58')
+      }
     }
   }
 
@@ -198,7 +207,7 @@ function makeFloorTexture(): CanvasTexture {
     }
   }
 
-  const bayColor = '#486165'
+  const bayColor = '#575765'
   for (const side of [-1, 1]) {
     for (const z of [-4.22, 1.96]) {
       const x = side * 3.37
@@ -220,18 +229,19 @@ function makeFloorTexture(): CanvasTexture {
       left += (rows[0].length + 2) * size
     }
   }
-  label('A-04', 10.58, 5.86, 3, '#687a7d')
-  rect(10.87, 6.11, .29, .045, '#334a52')
-  rect(11.77, 6.40, .37, .045, '#43585d')
-  rect(12.59, 6.23, .26, .045, '#334a52')
+  label('A-04', 10.58, 5.86, 3, '#82746f')
+  rect(10.87, 6.11, .29, .045, '#504752')
+  rect(11.77, 6.40, .37, .045, '#665659')
+  rect(12.59, 6.23, .26, .045, '#504752')
 
   for (const station of STATIONS) {
     const x = station.x - station.width / 2
     const z = station.z - station.depth / 2
     const w = station.width
     const d = station.depth
-    const bay = station.kind === 'isolation' ? '#766449' : station.kind === 'sampling' ? '#536972' : '#567675'
-    rect(x - .42, z - .39, w + .84, d + 1.18, '#2b3a43')
+    const bay = station.kind === 'isolation' ? '#946e53' : station.kind === 'sampling' ? '#817879' : '#687f7c'
+    const footing = station.kind === 'isolation' ? '#493a42' : station.kind === 'sampling' ? '#393943' : '#303e45'
+    rect(x - .42, z - .39, w + .84, d + 1.18, footing)
     rect(x - .39, z - .38, w + .78, .075, bay)
     rect(x - .39, z - .38, .075, d + 1.12, bay)
     rect(x + w + .31, z - .38, .075, d + 1.12, bay)
@@ -243,7 +253,7 @@ function makeFloorTexture(): CanvasTexture {
       rect(x + offset + .035, z + d + .22, .15, .065, bay)
     }
     label(station.kind === 'calibration' ? 'B-01' : station.kind === 'sampling' ? 'C-02' : 'Q-03',
-      station.x - .53, z + d + .44, 1, '#889291')
+      station.x - .53, z + d + .44, 1, '#a9a293')
   }
 
   const texture = new CanvasTexture(canvas)
@@ -412,7 +422,7 @@ export function createWorkshop(): Group {
     box(x - .56, .95, -9.69, .075, .065, .04, paint.brass)
   }
   box(7.79, 2.08, -11.27, 4.95, 1.12, 1.68, paint.wornTeal)
-  box(7.79, 2.72, -11.27, 5.12, 0.22, 1.77, paint.steel)
+  box(7.79, 2.72, -11.27, 5.12, 0.22, 1.77, paint.copper)
   box(7.79, 2.86, -11.30, 3.55, .10, 1.25, paint.shadow)
   box(7.79, 2.92, -10.90, 2.96, .06, .12, paint.brass)
   box(7.79, 2.13, -10.35, 4.62, 0.81, 0.18, paint.dark)
@@ -452,11 +462,12 @@ export function createWorkshop(): Group {
     box(x, 3.07, -12.75, .16, 1.89, .22, paint.shadow)
     box(x, 3.92, -11.85, .17, .17, 1.89, paint.steel)
     box(x, 3.91, -11.04, 2.28, .26, .70, paint.dark)
-    box(x, 3.90, -11.06, 2.17, .12, .63, paint.brass)
+    box(x, 3.90, -11.06, 2.17, .12, .63, paint.copper)
     box(x, 3.83, -10.73, 1.93, .13, .050, paint.lamp)
     box(x, 3.77, -11.06, 1.92, .08, .45, paint.lamp)
     for (const side of [-1, 1]) {
       box(x + side * .98, 3.94, -10.70, .095, .23, .075, paint.copper)
+      box(x + side * 1.12, 3.79, -10.81, .075, .24, .46, paint.frame)
     }
   }
 
@@ -521,8 +532,8 @@ export function createWorkshop(): Group {
         cylinder(x + offset, .882, z, .152, d * .72, paint.steel, 'z')
         cylinder(x + offset, .882, z + d * .30, .172, .052, paint.frame, 'z')
       }
-      box(x, .935, z - d * .43, w - .12, .134, .154, paint.rim)
-      box(x, .923, z + d * .43, w - .12, .13, .160, paint.steel)
+      box(x, .935, z - d * .43, w - .12, .134, .154, paint.lightSteel)
+      box(x, .923, z + d * .43, w - .12, .13, .160, paint.rim)
       stripe(x, .997, z + d * .423, w - .22, 'x')
       for (const dx of [-.61, .43]) {
         cylinder(x + dx, 1.008, z - .039, .43, .128, paint.rim, 'y')
@@ -532,14 +543,14 @@ export function createWorkshop(): Group {
       box(x - w * .38, .587, z + d * .48, .36, .155, .064, paint.rubber)
       box(x - w * .39, .608, z + d * .51, .098, .05, .04, paint.lamp)
     } else {
-      box(x, .653, z, w - .17, .091, d - .14, paint.brass)
+      box(x, .653, z, w - .17, .091, d - .14, paint.copper)
       for (const dx of [-w * .40, w * .40]) {
         for (const dz of [-d * .40, d * .40]) {
           box(x + dx, .772, z + dz, .141, 1.14, .151, paint.frame)
           box(x + dx, 1.31, z + dz, .175, .128, .19, paint.copper)
         }
       }
-      box(x, 1.18, z - d * .39, w * .84, .129, .126, paint.brass)
+      box(x, 1.18, z - d * .39, w * .84, .129, .126, paint.copper)
       for (const dz of [-d * .4, d * .4]) {
         box(x, .73, z + dz, w * .87, .091, .121, paint.yellow)
       }

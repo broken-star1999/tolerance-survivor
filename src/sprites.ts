@@ -86,6 +86,12 @@ function octagon(x: number, y: number, width: number, height: number, clip: numb
 }
 
 function drawBlank({ block, patch }: PixelPainter): void {
+  patch(ink, [[6, 19], [13, 22], [10, 29], [5, 31], [2, 28], [5, 25]])
+  patch(ink, [[25, 22], [33, 19], [36, 25], [33, 29], [27, 30], [25, 27]])
+  patch(steelShade, [[6, 23], [10, 24], [9, 28], [5, 29], [4, 27]])
+  patch(steelShade, [[27, 24], [32, 22], [34, 25], [32, 27], [27, 28]])
+  block(silver, 5, 27, 3, 1)
+  block(silver, 29, 26, 3, 1)
   const body = [[2, 13], [6, 7], [15, 3], [29, 3], [35, 6], [39, 12], [39, 17], [35, 23], [26, 27], [11, 28], [3, 24], [1, 19]] as const
   patch(ink, body)
   patch(slate, [[3, 15], [7, 10], [15, 6], [29, 6], [34, 8], [37, 13], [37, 17], [33, 22], [26, 26], [12, 26], [5, 23], [3, 19]])
@@ -99,6 +105,7 @@ function drawBlank({ block, patch }: PixelPainter): void {
   patch(ember, [[29, 4], [33, 6], [34, 8], [31, 8]])
   block(paleGold, 30, 5, 2, 1)
   block(white, 13, 8, 4, 1)
+  block(white, 8, 12, 2, 1)
   block(steel, 11, 23, 5, 1)
   block(steel, 23, 23, 3, 1)
   block(silver, 31, 18, 2, 1)
@@ -127,10 +134,16 @@ function drawBolt({ block, patch }: PixelPainter): void {
   block(ember, 8, 13, 3, 1)
   block(paleGold, 15, 5, 5, 1)
   block(paleGold, 8, 9, 3, 1)
+  block('#ffbd70', 13, 15, 3, 1)
+  block('#ffbd70', 21, 14, 3, 1)
   block('#d39651', 18, 19, 3, 1)
 }
 
 function drawPhantom({ block, patch }: PixelPainter): void {
+  patch(ink, [[6, 2], [5, 0], [9, 0], [11, 3], [15, 3], [15, 6], [7, 7]])
+  patch(ink, [[21, 3], [24, 0], [29, 0], [29, 2], [27, 4], [27, 5], [21, 5]])
+  block(steel, 6, 1, 3, 1)
+  block(pink, 24, 1, 4, 1)
   patch(ink, [[4, 6], [9, 2], [26, 2], [30, 5], [33, 12], [32, 27], [28, 32], [7, 32], [2, 28], [1, 19], [2, 10]])
   patch(plum, [[5, 7], [9, 4], [26, 3], [30, 7], [32, 14], [30, 27], [27, 30], [8, 30], [4, 27], [3, 20]])
   patch('#8b446c', [[6, 7], [10, 4], [25, 4], [29, 7], [29, 9], [7, 9], [5, 23], [4, 20]])

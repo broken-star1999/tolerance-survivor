@@ -1,4 +1,4 @@
-import { ARENA, HZ, angleDistance, isWeapon, nearestShortcut, nearestTool, type Input, type Run } from '../src/simulation.hot.ts'
+import { ARENA, HZ, angleDistance, inPress, isWeapon, nearestShortcut, nearestTool, type Input, type Run } from '../src/simulation.hot.ts'
 import { createCrowd, detourTowardPlayer } from '../src/enemy-crowd.ts'
 import { PLAYER_CLEARANCE, stationContact } from '../src/floor-plan.ts'
 
@@ -30,6 +30,27 @@ export function pickTestUpgrade(run: Run) {
 
 function bossMovement(run: Run): Input {
   const p = run.player
+  const press = run.boss.press
+  if (press && run.tick < press.strikesAt) {
+    if (!inPress(press, p.x, p.z, .28)) return { x: 0, z: 0, dash: false, accept: false }
+    let nearest = Infinity
+    let targetX = p.x
+    let targetZ = p.z
+    for (const [x, z] of [
+      [press.x - press.halfX - .35, p.z], [press.x + press.halfX + .35, p.z],
+      [p.x, press.z - press.halfZ - .35], [p.x, press.z + press.halfZ + .35],
+    ]) {
+      if (Math.abs(x) > ARENA.x || Math.abs(z) > ARENA.z || stationContact(p.x, p.z, x, z, PLAYER_CLEARANCE) < 1) continue
+      const score = Math.hypot(x - p.x, z - p.z) + (Math.hypot(x - run.boss.x, z - run.boss.z) < 1.7 ? 4 : 0)
+      if (score >= nearest) continue
+      nearest = score
+      targetX = x
+      targetZ = z
+    }
+    if (Number.isFinite(nearest)) {
+      return { x: (targetX - p.x) * 3, z: (targetZ - p.z) * 3, dash: nearest > 1.6, accept: false }
+    }
+  }
   const dx = p.x - run.boss.x
   const dz = p.z - run.boss.z
   const distance = Math.hypot(dx, dz)

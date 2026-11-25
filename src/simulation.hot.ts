@@ -12,6 +12,17 @@ export const MAX_BOLTS = 90
 export const SHORTCUT_TICKS = [50 * HZ, 100 * HZ, 150 * HZ] as const
 export const INSPECTION_HOLD = 96
 export const INSPECTION_RADIUS = 1.36
+export const DASH_COOLDOWN = 72
+export const DASH_BUFFER = 8
+const DASH_TICKS = 13
+const DASH_SPEED = 15
+const SURGE_WARNING = 105
+const PRESS_WARNING = 68
+export const SURGES = [
+  { tick: 32 * HZ, title: '上料尖峰', detail: '整列超差件从一侧入场，沿空出来的一侧绕行。', first: 9, second: 4 },
+  { tick: 122 * HZ, title: '复测积压', detail: '两批零件轮番压近，留意后到的远程干扰。', first: 12, second: 9 },
+  { tick: 180 * HZ, title: '交班前满载', detail: '两侧分批进料，留一条通往试验台的退路。', first: 16, second: 12 },
+] as const
 export const INCIDENTS = [
   { title: '待检件夹击', batch: '首批装配件', detail: '两侧涌入一批待检件。复检圈位于两路之间。' },
   { title: '试验数据异常', batch: '试验数据批次', detail: '两侧出现异常数据，留意蓄力方向，沿中间通行。' },
@@ -46,6 +57,10 @@ export const Signal = {
   incidentWarning: 8192,
   inspection: 16384,
   incidentClosed: 32768,
+  surgeWarning: 65536,
+  surgeArrival: 131072,
+  pressWarning: 262144,
+  pressImpact: 524288,
 } as const
 
 export const UPGRADES = {
@@ -208,6 +223,22 @@ export interface Incident {
   inspection: { x: number; z: number; held: number }
 }
 
+export interface Surge {
+  slot: number
+  groups: readonly (readonly IncomingPart[])[]
+  opensAt: number
+  issued: number
+}
+
+export interface PressStroke {
+  x: number
+  z: number
+  halfX: number
+  halfZ: number
+  warnAt: number
+  strikesAt: number
+}
+
 export interface RunEffect {
   kind: EffectKind
   x: number
@@ -242,6 +273,7 @@ export interface Player {
   dashZ: number
   dashUntil: number
   dashReadyAt: number
+  dashBufferedUntil: number
   protectedUntil: number
   hurtAt: number
   moving: boolean
@@ -262,6 +294,8 @@ export interface Run {
   projectiles: Bolt[]
   shortcuts: Shortcut[]
   incident: Incident | null
+  surge: Surge | null
+  nextSurge: number
   inspections: { slot: number; tick: number; isolated: number; recovery: number }[]
   tools: ToolDrop[]
   nextTool: number
@@ -294,6 +328,8 @@ export interface Run {
     flashUntil: number
     nextWave: number
     waveSets: number
+    pressAfterSet: number
+    press: PressStroke | null
   }
 }
 
@@ -324,14 +360,14 @@ export function createRun(seed = 0x41c603a1): Run {
     outcome: null, endCause: null,
     player: {
       x: 0, z: 0.6, hp: 100, maximumHp: 100, dx: 0, dz: -1, facing: 1,
-      dashX: 0, dashZ: -1, dashUntil: 0, dashReadyAt: 0,
+      dashX: 0, dashZ: -1, dashUntil: 0, dashReadyAt: 0, dashBufferedUntil: -1,
       protectedUntil: 50, hurtAt: -999, moving: false,
     },
     enemies: Array.from({ length: MAX_ENEMIES }, emptyEnemy),
     crowd: createCrowd(MAX_ENEMIES),
     shards: Array.from({ length: MAX_SHARDS }, () => ({ active: false, x: 0, z: 0, value: 0, phase: 0 })),
     projectiles: Array.from({ length: MAX_BOLTS }, () => ({ active: false, x: 0, z: 0, dx: 0, dz: 0 })),
-    shortcuts: [], incident: null, inspections: [],
+    shortcuts: [], incident: null, surge: null, nextSurge: 0, inspections: [],
     tools: [{ active: true, kind: 'caliper', x: 1.55, z: 0.6 }], nextTool: 0, lastToolPicked: null,
     effects: Array.from({ length: 64 }, () => ({ kind: 'hit', x: 0, z: 0, toX: 0, toZ: 0, from: 0, until: 0 })),
     waves: Array.from({ length: 12 }, () => ({
@@ -339,12 +375,13 @@ export function createRun(seed = 0x41c603a1): Run {
     })),
     choices: [],
     ranks: { caliper: 0, power: 0, tempo: 0, reach: 0, sweep: 0, stride: 0, guard: 0, magnet: 0, wrench: 0, file: 0, saw: 0, tape: 0, mallet: 0 },
-    kills: 0, level: 1, xp: 0, xpGoal: 14, boostUntil: 0,
+    kills: 0, level: 1, xp: 0, xpGoal: 12, boostUntil: 0,
     nextAttack: 32, nextSpawn: 85, nextShortcut: 0,
     weaponReady: { wrench: 0, file: 0, saw: 0, tape: 0, mallet: 0 },
     enemyCursor: 0, shardCursor: 0, boltCursor: 0, effectCursor: 0,
     accepted: [], passes: 0, beautifiers: 0,
-    boss: { x: 0, z: -1.1, hp: BOSS_HP, active: false, flashUntil: 0, nextWave: 0, waveSets: 0, fileAt: 0, fileHits: 0, fileDamage: 0 },
+    boss: { x: 0, z: -1.1, hp: BOSS_HP, active: false, flashUntil: 0, nextWave: 0, waveSets: 0,
+      fileAt: 0, fileHits: 0, fileDamage: 0, pressAfterSet: 0, press: null },
   }
 
   for (let i = 0; i < 7; i++) {
@@ -414,8 +451,7 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1)
 
 function spawnPatrol(run: Run) {
   const time = run.tick / HZ
-  let number = time < 26 ? 1 : time < 60 ? 2 : time < 106 ? 3 : time < 148 ? 4 : time < 178 ? 5 : 7
-  if (time > 175 && random(run) > 0.58) number++
+  const number = time < 25 ? 1 : time < 60 ? 2 : time < 112 ? 3 : time < 172 ? 4 : 5
   for (let i = 0; i < number; i++) {
     const roll = random(run)
     const kind: EnemyKind = time > 87 && roll < 0.16
@@ -432,7 +468,56 @@ function spawnPatrol(run: Run) {
     }
     spawnEnemy(run, kind, x, z)
   }
-  run.nextSpawn = run.tick + Math.max(38, Math.round(108 - time * 0.32 + random(run) * 20))
+  run.nextSpawn = run.tick + Math.max(47, Math.round(104 - time * 0.29 + random(run) * 18))
+}
+
+const SURGE_GAP = 53
+
+export function surgeGroupAt(surge: Surge, group: number): number {
+  return surge.opensAt + group * SURGE_GAP
+}
+
+function prepareSurge(run: Run, slot: number): Surge {
+  const profile = SURGES[slot]
+  const { player } = run
+  const seededSide = ((run.seed >>> slot) & 1) === 1 ? 1 : -1
+  const leadSide = Math.abs(player.x) > 5.1 ? -Math.sign(player.x) : seededSide
+  const groups = [profile.first, profile.second].map((count, group) => {
+    const side = group === 0 || slot === 0 ? leadSide : -leadSide
+    const centerZ = clamp(player.z, -3.5, 3.5)
+    return Array.from({ length: count }, (_, index): IncomingPart => {
+      const row = Math.floor(index / 8)
+      const width = Math.min(8, count - row * 8)
+      const line = (index % 8 - (width - 1) * .5) * 1.12
+      const z = centerZ + line + (group ? .74 * side : 0)
+      const x = player.x + side * (5.8 + .97 * row + group * .92)
+      const kind = slot > 0 && group === 1 && index % 3 === 0 ? 'phantom'
+        : slot > 0 && index % (slot === 2 ? 3 : 5) === 0 ? 'bolt' : 'blank'
+      return { kind, ...nearestFreePoint(x, z, .68) }
+    })
+  })
+  return { slot, groups, opensAt: profile.tick, issued: 0 }
+}
+
+function advanceSurges(run: Run) {
+  if (run.training) return 0
+  let signal = 0
+  if (!run.surge && run.nextSurge < SURGES.length && run.tick >= SURGES[run.nextSurge].tick - SURGE_WARNING) {
+    run.surge = prepareSurge(run, run.nextSurge++)
+    signal |= Signal.surgeWarning
+  }
+  const surge = run.surge
+  if (!surge) return signal
+  while (surge.issued < surge.groups.length && run.tick >= surgeGroupAt(surge, surge.issued)) {
+    for (const part of surge.groups[surge.issued]) spawnEnemy(run, part.kind, part.x, part.z)
+    surge.issued++
+    signal |= Signal.surgeArrival
+  }
+  if (run.tick >= surgeGroupAt(surge, surge.groups.length - 1) + 102) {
+    run.surge = null
+    run.nextSpawn = Math.max(run.nextSpawn, run.tick + 92)
+  }
+  return signal
 }
 
 function addEffect(run: Run, kind: EffectKind, x: number, z: number, toX: number, toZ: number, duration: number) {
@@ -620,25 +705,35 @@ function movePlayer(run: Run, input: Input) {
     player.dz = moveZ
     if (Math.abs(moveX) > 0.12) player.facing = moveX < 0 ? -1 : 1
   }
-  if (input.dash && run.tick >= player.dashReadyAt) {
+  if (input.dash && player.dashReadyAt - run.tick <= DASH_BUFFER) player.dashBufferedUntil = run.tick + DASH_BUFFER
+  if (run.tick <= player.dashBufferedUntil && run.tick >= player.dashReadyAt) {
     const length = Math.hypot(player.dx, player.dz) || 1
     player.dashX = player.dx / length
     player.dashZ = player.dz / length
-    player.dashUntil = run.tick + 13
-    player.dashReadyAt = run.tick + 78
+    player.dashUntil = run.tick + DASH_TICKS
+    player.dashReadyAt = run.tick + DASH_COOLDOWN
+    player.dashBufferedUntil = -1
     player.protectedUntil = Math.max(run.tick + 16, player.protectedUntil)
-    const toX = clamp(player.x + player.dashX * 2.2, -ARENA.x, ARENA.x)
-    const toZ = clamp(player.z + player.dashZ * 2.2, -ARENA.z, ARENA.z)
+    const distance = DASH_SPEED * DASH_TICKS / HZ
+    const toX = clamp(player.x + player.dashX * distance, -ARENA.x, ARENA.x)
+    const toZ = clamp(player.z + player.dashZ * distance, -ARENA.z, ARENA.z)
     const travel = stationContact(player.x, player.z, toX, toZ, PLAYER_CLEARANCE)
     addEffect(run, 'dash', player.x, player.z, player.x + (toX - player.x) * travel, player.z + (toZ - player.z) * travel, 16)
     signaled = Signal.dash
   }
   const dashing = run.tick < player.dashUntil
-  const speed = dashing ? 15.0 : 4.9 + run.ranks.stride * 0.49
+  const walkSpeed = 4.9 + run.ranks.stride * 0.49
+  const speed = dashing ? DASH_SPEED : walkSpeed
   const beforeX = player.x
   const beforeZ = player.z
   moveOnFloor(player, (dashing ? player.dashX : moveX) * speed / HZ, (dashing ? player.dashZ : moveZ) * speed / HZ, PLAYER_CLEARANCE)
   player.moving = Math.abs(player.x - beforeX) + Math.abs(player.z - beforeZ) > .003
+  if (dashing && !player.moving) {
+    player.dashUntil = run.tick
+    addEffect(run, 'impact', player.x, player.z, 0, 0, 13)
+    moveOnFloor(player, moveX * walkSpeed / HZ, moveZ * walkSpeed / HZ, PLAYER_CLEARANCE)
+    player.moving = Math.abs(player.x - beforeX) + Math.abs(player.z - beforeZ) > .003
+  }
   return signaled
 }
 
@@ -1053,12 +1148,19 @@ export function chooseUpgrade(run: Run, index: number) {
 
 function introduceBoss(run: Run) {
   closeIncident(run)
+  run.surge = null
   run.phase = 'boss'
-  for (const enemy of run.enemies) enemy.active = false
+  const player = run.player
+  const retained = run.training ? [] : run.enemies.filter(enemy => enemy.active)
+    .sort((a, b) => Math.hypot(a.x - player.x, a.z - player.z) - Math.hypot(b.x - player.x, b.z - player.z))
+    .slice(0, 6)
+  for (const enemy of run.enemies) {
+    if (enemy.active && !retained.includes(enemy)) enemy.active = false
+  }
   for (const bolt of run.projectiles) bolt.active = false
   for (const shortcut of run.shortcuts) shortcut.active = false
   run.boss.active = true
-  run.boss.nextWave = run.tick + 80
+  run.boss.nextWave = run.tick + 100
   run.player.protectedUntil = Math.max(run.player.protectedUntil, run.tick + 90)
   addEffect(run, 'arrival', run.boss.x, run.boss.z, 0, 0, 70)
 }
@@ -1094,11 +1196,43 @@ function scheduleWaves(run: Run) {
   }
 }
 
+export function inPress(stroke: PressStroke, x: number, z: number, margin = 0): boolean {
+  return Math.abs(x - stroke.x) < stroke.halfX + margin && Math.abs(z - stroke.z) < stroke.halfZ + margin
+}
+
+function callPress(run: Run) {
+  const { boss, player } = run
+  const alongX = boss.waveSets % 4 === 2
+  const halfX = alongX ? 2.65 : 1.43
+  const halfZ = alongX ? 1.43 : 2.65
+  boss.press = {
+    x: clamp(player.x + (player.moving ? player.dx * .85 : 0), -ARENA.x + halfX, ARENA.x - halfX),
+    z: clamp(player.z + (player.moving ? player.dz * .85 : 0), -ARENA.z + halfZ, ARENA.z - halfZ),
+    halfX, halfZ, warnAt: run.tick, strikesAt: run.tick + PRESS_WARNING,
+  }
+  boss.pressAfterSet = boss.waveSets
+  boss.nextWave = run.tick + 146
+}
+
 function progressWaves(run: Run) {
   let signal = 0
-  if (run.tick >= run.boss.nextWave) {
-    scheduleWaves(run)
-    signal |= Signal.wave
+  const { boss, player } = run
+  if (run.tick >= boss.nextWave) {
+    if (!run.training && boss.waveSets > 0 && boss.waveSets % 2 === 0 && boss.pressAfterSet !== boss.waveSets) {
+      callPress(run)
+      signal |= Signal.pressWarning
+    } else {
+      scheduleWaves(run)
+      signal |= Signal.wave
+    }
+  }
+  const press = boss.press
+  if (press) {
+    if (run.tick === press.strikesAt) {
+      if (inPress(press, player.x, player.z, .18)) signal |= hurt(run, 26)
+      signal |= Signal.pressImpact
+    }
+    if (run.tick >= press.strikesAt + 28) boss.press = null
   }
   const x = run.player.x - run.boss.x
   const z = run.player.z - run.boss.z
@@ -1120,9 +1254,11 @@ function progressWaves(run: Run) {
 
 function endRun(run: Run, cause: 'health' | 'timeout' | 'boss') {
   closeIncident(run)
+  run.surge = null
   run.phase = 'ended'
   run.endCause = cause
   run.boss.active = false
+  run.boss.press = null
   run.choices.length = 0
   run.outcome = cause !== 'boss' ? 'stopped' : hazardValue(run) === 0 ? 'qualified' : 'repair'
   return Signal.end
@@ -1143,7 +1279,8 @@ export function advanceRun(run: Run, input: Input) {
       dropTool(run)
       signal |= Signal.toolDrop
     }
-    if (run.tick >= run.nextSpawn) spawnPatrol(run)
+    signal |= advanceSurges(run)
+    if (!run.surge && run.tick >= run.nextSpawn) spawnPatrol(run)
     signal |= advanceIncident(run)
     if (input.accept) signal |= acceptShortcut(run)
   }

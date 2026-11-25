@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { PLAYER_CLEARANCE, STATIONS, isOpenFloor } from '../src/floor-plan.ts'
 import {
-  BOSS_TICK, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, Signal, advanceRun, attackInterval,
-  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, previewToolStats, waveCount, waveCycleTicks, waveGapDegrees,
+  BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
+  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
   type Run,
 } from '../src/simulation.hot.ts'
 import { pickTestUpgrade, testInput } from './play-policy.ts'
@@ -11,6 +11,7 @@ import { pickTestUpgrade, testInput } from './play-policy.ts'
 function emptyFloor(run: Run) {
   for (const enemy of run.enemies) enemy.active = false
   run.nextSpawn = Infinity
+  run.nextSurge = SURGES.length
 }
 
 function getShortcut(run: Run, slot: number) {
@@ -113,7 +114,8 @@ test('the three shortcuts alter width and cadence while every actual wave keeps 
       run.beautifiers = beautifiers
       run.tick = BOSS_TICK - 1
       assert.ok(advanceRun(run, IDLE_INPUT) & Signal.boss)
-      for (let i = 0; i < 80; i++) advanceRun(run, IDLE_INPUT)
+      const warningAt = run.boss.nextWave
+      while (run.tick < warningAt) advanceRun(run, IDLE_INPUT)
       const waves = run.waves.filter(wave => wave.active)
       assert.equal(waves.length, 1 + passes)
       assert.equal(run.boss.nextWave - run.tick, (6 - 0.5 * (passes + beautifiers)) * HZ)
@@ -351,4 +353,64 @@ test('a blocked charge recovers and a projectile is intercepted by the same stat
   assert.equal(shot.active, false)
   assert.equal(run.player.hp, 100)
   assert.equal(run.effects.filter(effect => effect.kind === 'impact' && effect.until > run.tick).length, 2)
+})
+
+test('a press near dash recovery executes once at readiness and uses the current direction', () => {
+  const run = createRun(18)
+  emptyFloor(run)
+  run.player.dashReadyAt = DASH_BUFFER + 4
+  assert.equal(advanceRun(run, { ...IDLE_INPUT, x: 1, dash: true }) & Signal.dash, 0)
+  assert.equal(run.player.dashBufferedUntil, -1)
+  while (run.tick < 3) advanceRun(run, IDLE_INPUT)
+  assert.equal(advanceRun(run, { ...IDLE_INPUT, x: 1, dash: true }) & Signal.dash, 0)
+  assert.ok(run.player.dashBufferedUntil >= run.player.dashReadyAt)
+  while (run.tick < DASH_BUFFER + 3) advanceRun(run, IDLE_INPUT)
+  assert.ok(advanceRun(run, { ...IDLE_INPUT, z: 1 }) & Signal.dash)
+  assert.equal(run.player.dashX, 0)
+  assert.equal(run.player.dashZ, 1)
+  assert.equal(run.player.dashReadyAt - run.tick, DASH_COOLDOWN)
+  assert.equal(run.player.dashBufferedUntil, -1)
+  assert.equal(advanceRun(run, IDLE_INPUT) & Signal.dash, 0)
+})
+
+test('a surge telegraphs two separate groups and leaves a brief opening afterward', () => {
+  const run = createRun(464)
+  emptyFloor(run)
+  run.nextSurge = 0
+  run.tick = SURGES[0].tick - 106
+  run.nextSpawn = SURGES[0].tick
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.surgeWarning)
+  const surge = run.surge!
+  assert.equal(run.enemies.filter(enemy => enemy.active).length, 0)
+  while (run.tick < surge.opensAt - 1) advanceRun(run, IDLE_INPUT)
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.surgeArrival)
+  assert.equal(run.enemies.filter(enemy => enemy.active).length, SURGES[0].first)
+  const second = surgeGroupAt(surge, 1)
+  while (run.tick < second - 1) advanceRun(run, IDLE_INPUT)
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.surgeArrival)
+  assert.equal(run.enemies.filter(enemy => enemy.active).length, SURGES[0].first + SURGES[0].second)
+  while (run.surge) advanceRun(run, IDLE_INPUT)
+  assert.ok(run.nextSpawn > run.tick + HZ)
+})
+
+test('the pressure head locks its ground zone and deals damage only at the indicated strike', () => {
+  for (const stepAway of [false, true]) {
+    const run = createRun(94)
+    emptyFloor(run)
+    run.tick = BOSS_TICK - 1
+    advanceRun(run, IDLE_INPUT)
+    run.boss.waveSets = 2
+    run.boss.nextWave = run.tick + 1
+    run.player.protectedUntil = 0
+    assert.ok(advanceRun(run, IDLE_INPUT) & Signal.pressWarning)
+    const press = run.boss.press!
+    assert.equal(press.x, run.player.x)
+    if (stepAway) run.player.z += press.halfZ + .6
+    while (run.tick < press.strikesAt - 1) advanceRun(run, IDLE_INPUT)
+    assert.equal(run.player.hp, 100)
+    assert.ok(advanceRun(run, IDLE_INPUT) & Signal.pressImpact)
+    assert.equal(run.player.hp, stepAway ? 100 : 74)
+    for (let i = 0; i < 28; i++) advanceRun(run, IDLE_INPUT)
+    assert.equal(run.boss.press, null)
+  }
 })

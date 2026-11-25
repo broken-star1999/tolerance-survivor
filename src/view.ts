@@ -4,7 +4,7 @@ import {
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
-import { ARENA, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { ARENA, DASH_COOLDOWN, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
 import { stationContact } from './floor-plan.ts'
 import { createInspector, createTestRig } from './models.ts'
 import { createSpriteAtlas, type SpriteName } from './sprites.ts'
@@ -18,6 +18,8 @@ const LILAC = new Color('#f593db')
 const RUST = new Color('#ff8a63')
 const ICE = new Color('#67bed3')
 const DARK = new Color('#071619')
+const HUD_INK = new Color('#111b27')
+const CALIBRATION_PAINT = new Color('#bc986f')
 
 const EMPTY_FLAGS = { depthWrite: false, transparent: true }
 type Atlas = ReturnType<typeof createSpriteAtlas>
@@ -79,10 +81,10 @@ const waveFragment = /* glsl */ [
   '  vec3 color = safe ? green : red;',
   '  if (phase < .5) {',
   '    if (r < .8 || r > 13.0) discard;',
-  '    float stripes = step(.63,fract((ground.x + ground.y)*1.65));',
+  '    float stripes = step(.69,fract((ground.x + ground.y)*1.90));',
   '    float ruler = step(.91,fract(r/2.6));',
   '    float boundary = 1.0 - smoothstep(.012,.033,abs(d-halfGap));',
-  '    alpha = (safe ? .065 : .101 + stripes*.065) + ruler*.15 + boundary*.46;',
+  '    alpha = (safe ? .055 : .065 + stripes*.090) + ruler*.091 + boundary*.54;',
   '    alpha *= (.62 + .38*lifetime) * (1.0-smoothstep(11.7,13.0,r));',
   '    if (boundary > .53) color = green;',
   '  } else {',
@@ -112,10 +114,33 @@ const pixelPostFragment = /* glsl */ [
   'varying vec2 screenUv;',
   'void main() {',
   '  vec3 p = texture2D(picture, screenUv).rgb;',
-  '  float vignette = length((screenUv - vec2(.53,.54))*vec2(1.02,.86));',
-  '  p *= 1.04 - .16*smoothstep(.27,.70,vignette);',
-  '  p += vec3(.003,.004,.006);',
+  '  float vignette = length((screenUv - vec2(.55,.53))*vec2(1.02,.86));',
+  '  p *= 1.08 - .19*smoothstep(.24,.69,vignette);',
+  '  p += vec3(.008,.004,.010);',
   '  gl_FragColor = vec4(p,1.);',
+  '  #include <colorspace_fragment>',
+  '}',
+].join('\n')
+
+const pressFragment = /* glsl */ [
+  'varying vec2 ground;',
+  'uniform float elapsed;',
+  'uniform float hit;',
+  'void main() {',
+  '  vec2 box = abs(ground) * 2.;',
+  '  float edge = max(box.x, box.y);',
+  '  float trace = step(.887,edge) * (1.-step(.933,edge));',
+  '  float stripe = step(.64,fract((ground.x-ground.y)*12.));',
+  '  float scale = step(.949,edge) * step(.36,fract((ground.x+ground.y)*12.0));',
+  '  float alpha = .17 + stripe*(.10+elapsed*.10) + trace*.62 + scale*.53;',
+  '  vec3 tone = mix(vec3(.27,.057,.041),vec3(1.,.36,.10),trace+scale*.58);',
+  '  if(edge > .932 && edge < .946) { tone = vec3(.03,.014,.011); alpha = .91; }',
+  '  if (hit > .5) {',
+  '    float band = 1.0-smoothstep(.022,.11,abs(edge-elapsed));',
+  '    tone = mix(vec3(.55,.12,.05),vec3(1.,.68,.29),band);',
+  '    alpha = max(.24*(1.-elapsed),band*.90);',
+  '  }',
+  '  gl_FragColor = vec4(tone,alpha);',
   '  #include <colorspace_fragment>',
   '}',
 ].join('\n')
@@ -219,12 +244,15 @@ export function createGameView(host: HTMLElement) {
   host.append(renderer.domElement)
 
   const world = new Scene()
-  world.background = new Color('#13202a')
+  world.background = new Color('#24232f')
   world.add(createWorkshop())
-  world.add(new HemisphereLight('#dfedf5', '#746c71', 1.77))
-  const overhead = new DirectionalLight('#ffe0b8', 2.08)
+  world.add(new HemisphereLight('#dee7f4', '#776376', 1.82))
+  const overhead = new DirectionalLight('#ffe6c2', 2.14)
   overhead.position.set(-7, 12, -4)
   world.add(overhead)
+  const rimLight = new DirectionalLight('#bce8e8', .76)
+  rimLight.position.set(6, 4, 7)
+  world.add(rimLight)
   const inspector = createInspector()
   const testRig = createTestRig()
   world.add(inspector.group, testRig.group)
@@ -248,6 +276,14 @@ export function createGameView(host: HTMLElement) {
   const waveGeometry = new PlaneGeometry(40, 40)
   const wavers = Array.from({ length: 12 }, () => makeWaveMesh(waveGeometry))
   world.add(...wavers)
+  const pressMarker = new Mesh(new PlaneGeometry(1, 1), new ShaderMaterial({
+    vertexShader: waveVertex, fragmentShader: pressFragment, ...EMPTY_FLAGS,
+    uniforms: { elapsed: { value: 0 }, hit: { value: 0 } },
+  }))
+  pressMarker.rotation.x = -Math.PI / 2
+  pressMarker.renderOrder = 9
+  pressMarker.visible = false
+  world.add(pressMarker)
 
   const target = new WebGLRenderTarget(1, 1, {
     minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true, stencilBuffer: false,
@@ -271,6 +307,7 @@ export function createGameView(host: HTMLElement) {
   let viewHeight = 20
   let cameraX = 0
   let cameraZ = 0
+  let lastFrame = 0
   let renderedRun: Run | null = null
 
   function resize() {
@@ -342,11 +379,11 @@ export function createGameView(host: HTMLElement) {
     strips.count++
   }
 
-  function drawDashMark(x: number, z: number, direction: number, scale: number) {
+  function drawDashMark(x: number, z: number, direction: number, scale: number, color = MINT) {
     const dx = Math.cos(direction) * scale
     const dz = Math.sin(direction) * scale
-    line(x - dx * .65 - dz * .35, z - dz * .65 + dx * .35, x + dx * .15, z + dz * .15, .07, MINT, .13)
-    line(x - dx * .65 + dz * .35, z - dz * .65 - dx * .35, x + dx * .15, z + dz * .15, .07, MINT, .13)
+    line(x - dx * .65 - dz * .35, z - dz * .65 + dx * .35, x + dx * .15, z + dz * .15, .07, color, .13)
+    line(x - dx * .65 + dz * .35, z - dz * .65 - dx * .35, x + dx * .15, z + dz * .15, .07, color, .13)
   }
 
   function drawWave(wave: Wave, run: Run, index: number) {
@@ -457,6 +494,16 @@ export function createGameView(host: HTMLElement) {
   function drawFloor(run: Run) {
     const time = run.tick / HZ
     drawIncident(run)
+    const surge = run.surge
+    if (surge) {
+      for (let i = surge.issued; i < surge.groups.length; i++) {
+        for (const part of surge.groups[i]) {
+          const tone = part.kind === 'phantom' ? LILAC : i > surge.issued ? RUST : GOLD
+          marker(part.x, part.z, .43 + .07 * Math.sin(time * 9), tone, .07)
+          drawDashMark(part.x, part.z, Math.atan2(-part.z * .24, run.player.x - part.x), .47, tone)
+        }
+      }
+    }
     for (const shard of run.shards) {
       if (!shard.active) continue
       const pulse = .5 + .5 * Math.sin(time * 6 + shard.phase)
@@ -538,15 +585,43 @@ export function createGameView(host: HTMLElement) {
     shadow(player.x - .06, player.z - .024, .46, .27)
     castShadow(player.x, player.z, .37, dashing ? .97 : .75)
     marker(player.x, player.z, .50, run.tick < run.boostUntil ? GOLD : MINT)
+    const hp = player.hp / player.maximumHp
+    line(player.x - .57, player.z + .71, player.x + .57, player.z + .71, .135, HUD_INK, .10)
+    if (hp > 0) line(player.x - .52, player.z + .71, player.x - .52 + 1.04 * hp,
+      player.z + .71, .081, hp < .27 ? RUST : MINT, .12)
+    if (run.tick < player.dashReadyAt) {
+      const charge = 1 - (player.dashReadyAt - run.tick) / DASH_COOLDOWN
+      if (charge > .01) line(player.x - .50, player.z + .88, player.x - .50 + charge,
+        player.z + .88, .060, ICE, .10)
+    }
     if (run.boss.active) {
       const { boss } = run
-      const charging = run.waves.some(wave => wave.active && run.tick >= wave.warnAt && run.tick < wave.pulseAt)
+      const press = boss.press
+      const warning = !!press && run.tick < press.strikesAt
+      const charging = warning ||
+        run.waves.some(wave => wave.active && run.tick >= wave.warnAt && run.tick < wave.pulseAt)
+      let ramTravel = 0
+      if (press) {
+        const toImpact = press.strikesAt - run.tick
+        ramTravel = warning
+          ? Math.max(0, 1 - toImpact / 9) ** 2
+          : 1 - Math.min(1, -toImpact / 23)
+      }
       testRig.group.position.set(boss.x, 0, boss.z)
-      testRig.pose(time, charging, Math.max(0, (boss.flashUntil - run.tick) / 7))
+      testRig.pose(time, charging, Math.max(0, (boss.flashUntil - run.tick) / 7), ramTravel)
       shadow(boss.x - .12, boss.z - .045, 1.78, 1.09)
       castShadow(boss.x, boss.z, .99, 1.90)
       marker(boss.x, boss.z, 1.93, RUST)
       for (let i = 0; i < run.waves.length; i++) drawWave(run.waves[i], run, i)
+      if (press) {
+        pressMarker.visible = true
+        pressMarker.position.set(press.x, .092, press.z)
+        pressMarker.scale.set(press.halfX * 2, press.halfZ * 2, 1)
+        pressMarker.material.uniforms.hit.value = warning ? 0 : 1
+        pressMarker.material.uniforms.elapsed.value = warning
+          ? (run.tick - press.warnAt) / (press.strikesAt - press.warnAt)
+          : (run.tick - press.strikesAt) / 28
+      }
     }
 
     for (const effect of run.effects) {
@@ -574,6 +649,11 @@ export function createGameView(host: HTMLElement) {
         const dz = effect.toZ - effect.z
         const width = .20 * (1 - progress) + .025
         line(effect.x, effect.z, effect.toX, effect.toZ, width, ICE, .05)
+        for (const side of [-1, 1]) {
+          const spread = side * (.05 + progress * .06)
+          line(effect.x + dx * .12 - dz * spread, effect.z + dz * .12 + dx * spread,
+            effect.toX - dz * spread, effect.toZ + dx * spread, .065 * (1 - progress), MINT, .054)
+        }
         for (let i = 0; i < 3; i++) {
           const at = .27 + i * .26 - progress * .21
           const side = (i % 2 ? .14 : -.14) * (1 + progress)
@@ -607,16 +687,23 @@ export function createGameView(host: HTMLElement) {
 
   function drawTitle(time: number) {
     const portrait = aspect < 1
-    const x = portrait ? 2.23 : 6.22
-    const z = portrait ? -2.54 : -.18
+    const x = portrait ? 1.66 : 6.9
+    const z = portrait ? -2.74 : -.34
     const bob = .06 * Math.sin(time * 2)
-    inspector.group.scale.setScalar(portrait ? 2.16 : 2.54)
+    inspector.group.scale.setScalar(portrait ? 2.84 : 3.03)
     inspector.group.position.set(x, 0, z)
-    inspector.group.rotation.y = .43 + Math.sin(time * .85) * .19
+    inspector.group.rotation.y = .36 + Math.sin(time * .85) * .18
     inspector.pose(time, false, false, (.5 + .5 * Math.sin(time * 3.5)) ** 6 * .64, true, 0)
-    shadow(x, z, 1.13, .65)
-    castShadow(x, z, .78, 1.67)
-    marker(x, z, 1.29 + bob, MINT)
+    shadow(x, z, 1.32, .74)
+    castShadow(x, z, .86, 1.76)
+    marker(x, z, 1.44 + bob, MINT)
+    for (let tick = 0; tick < 24; tick++) {
+      const angle = TAU * tick / 24
+      const dx = Math.cos(angle)
+      const dz = Math.sin(angle)
+      const end = tick % 6 === 0 ? 1.84 : 1.73
+      line(x + dx * 1.60, z + dz * 1.60, x + dx * end, z + dz * end, .044, CALIBRATION_PAINT, .055)
+    }
     marker(x + 3.4, z - 3.2, .74, GOLD)
     sprites.add('pass', x + 3.4, z - 3.2, .87, .9, .26 + Math.sin(time * 2.7) * .13)
     const layout: { name: SpriteName; x: number; z: number; w: number; h: number }[] = [
@@ -655,12 +742,16 @@ export function createGameView(host: HTMLElement) {
   }
 
   function render(run: Run | null, milliseconds: number, trainingTarget?: { x: number; z: number } | null) {
+    const frameTime = milliseconds > lastFrame ? Math.min(58, milliseconds - lastFrame) : 1000 / HZ
+    const cameraStep = 1 - .85 ** (frameTime * HZ / 1000)
+    lastFrame = milliseconds
     sprites.clear()
     shadows.count = 0
     lightShadows.count = 0
     markings.count = 0
     strips.count = 0
     testRig.group.visible = run?.boss.active ?? false
+    pressMarker.visible = false
     for (const wave of wavers) wave.visible = false
     if (run) {
       drawFloor(run)
@@ -678,8 +769,8 @@ export function createGameView(host: HTMLElement) {
           targetX = Math.max(right - viewWidth / 2, Math.min(left + viewWidth / 2, targetX))
         }
       }
-      cameraX += (targetX - cameraX) * .105
-      cameraZ += (targetZ - cameraZ) * .105
+      cameraX += (targetX - cameraX) * cameraStep
+      cameraZ += (targetZ - cameraZ) * cameraStep
     } else {
       const portrait = aspect < 1
       cameraX = portrait ? 1.5 : -2.3
