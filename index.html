@@ -38,6 +38,7 @@
           <div class="title-actions">
             <button class="action primary" type="button" id="start-button"><span class="play-icon">▶</span>开始值班<span class="enter-hint">↵</span></button>
             <button class="action secondary" type="button" id="learn-button">操作训练</button>
+            <button class="action secondary" type="button" id="intro-button">作品简介</button>
           </div>
           <p class="boot-message" id="boot-message" role="status" hidden></p>
           <div class="control-legend" aria-label="操作说明">
@@ -164,6 +165,22 @@
           <div class="dialog-buttons">
             <button class="action primary" id="retry-button" type="button">再值一班</button>
             <button class="action secondary" id="end-home" type="button">返回标题</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="overlay" id="intro-screen" aria-labelledby="intro-title" hidden>
+        <div class="dialog intro-dialog" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+          <div class="dialog-eyebrow">2026 工学院廉洁文化节 · 智造廉品</div>
+          <h2 id="intro-title">以廉为尺，量精工之度</h2>
+          <p class="dialog-text">《公差幸存者》将工程伦理与廉洁底线融入试制车间质检。图纸允许公差，记录容不得掺水——你在产线上的每一次取舍，都会留下可追溯的后果。</p>
+          <ul class="intro-list">
+            <li><strong>守住底线 · 合规复检</strong><span>三批超差样件送检时，留在绿圈完成 1.6 秒复检，如实留档、隔离超差件并恢复状态。</span></li>
+            <li class="intro-warn"><strong>警惕捷径 · 隐患追溯</strong><span>「免检放行」与「数据美化」虽能应急，却会在 03:30 事故战引发冲击波加密、缺口变窄与隐患件回流，并逐批写入交班报告。</span></li>
+            <li class="intro-tech"><strong>纯代码智造 · 离线可玩</strong><span>基于 TypeScript、Three.js 与 Web Audio 纯程序化构建 3D 车间、模型与配乐，60 Hz 固定步长模拟，无需外部素材。</span></li>
+          </ul>
+          <div class="dialog-buttons">
+            <button class="action primary" id="intro-close" type="button">进入车间</button>
           </div>
         </div>
       </section>

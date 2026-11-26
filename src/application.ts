@@ -73,6 +73,9 @@ export function createApplication() {
   const titleScreen = element('title-screen')
   const startButton = element<HTMLButtonElement>('start-button')
   const learnButton = element<HTMLButtonElement>('learn-button')
+  const introButton = element<HTMLButtonElement>('intro-button')
+  const introScreen = element('intro-screen')
+  const introClose = element<HTMLButtonElement>('intro-close')
   const skipTraining = element<HTMLButtonElement>('skip-training')
   const finishTraining = element<HTMLButtonElement>('finish-training')
   const trainingPanel = element('training-panel')
@@ -442,6 +445,27 @@ export function createApplication() {
     catch { /* The current session still remembers the preference. */ }
   }
 
+  function readIntroPreference() {
+    try { return localStorage.getItem('tolerance-survivor-intro-v1') === 'seen' }
+    catch { return false }
+  }
+
+  function markIntroSeen() {
+    try { localStorage.setItem('tolerance-survivor-intro-v1', 'seen') }
+    catch { /* The current session still remembers the preference. */ }
+  }
+
+  function openIntro() {
+    introScreen.hidden = false
+    introClose.focus({ preventScroll: true })
+  }
+
+  function closeIntro() {
+    markIntroSeen()
+    introScreen.hidden = true
+    startButton.focus({ preventScroll: true })
+  }
+
   function showTitle() {
     run = null
     lesson = null
@@ -473,6 +497,7 @@ export function createApplication() {
     accumulator = 0
     clearControls()
     titleScreen.hidden = true
+    introScreen.hidden = true
     hud.hidden = false
     touch.hidden = false
     pauseButton.hidden = false
@@ -843,6 +868,8 @@ export function createApplication() {
 
   startButton.addEventListener('click', startFromTitle)
   learnButton.addEventListener('click', beginLesson)
+  introButton.addEventListener('click', openIntro)
+  introClose.addEventListener('click', closeIntro)
   skipTraining.addEventListener('click', finishLesson)
   finishTraining.addEventListener('click', finishLesson)
   retryButton.addEventListener('click', () => start())
@@ -873,6 +900,13 @@ export function createApplication() {
     if (event.altKey || event.ctrlKey || event.metaKey) return
     sound.unlock()
     if (!run) {
+      if (!introScreen.hidden) {
+        if ((event.code === 'Escape' || event.code === 'Enter') && !event.repeat) {
+          event.preventDefault()
+          closeIntro()
+        }
+        return
+      }
       if (event.code === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
         event.preventDefault()
         startFromTitle()
@@ -984,5 +1018,6 @@ export function createApplication() {
 
   workstation.dataset.mode = 'title'
   draw(performance.now())
+  if (!readIntroPreference()) openIntro()
   return { startLoop, start, advance, draw, select, getRun: () => run }
 }
