@@ -4,7 +4,7 @@ import {
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
-import { ARENA, DASH_COOLDOWN, HAZARD_BATCH, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUT_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { ARENA, DASH_COOLDOWN, HAZARD_BATCH, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUT_RADIUS, type Run, type RunEffect, type ToolKind, type Wave } from './simulation.hot.ts'
 import { stationContact } from './floor-plan.ts'
 import { createInspector, createTestRig } from './models.ts'
 import { createSpriteAtlas, type SpriteName } from './sprites.ts'
@@ -421,12 +421,7 @@ export function createGameView(host: HTMLElement) {
     const dz = effect.toZ - effect.z
     const reach = Math.hypot(dx, dz)
     const heading = Math.atan2(dz, dx)
-    if (effect.kind === 'file') {
-      if (Math.floor(progress * 7) % 2 === 0) {
-        line(effect.x + dx * .29, effect.z + dz * .29, effect.toX, effect.toZ, .095, ICE, .145)
-        sprites.add('spark', effect.toX, effect.toZ, .48, .43, .42, 1, .42)
-      }
-    } else if (effect.kind === 'tape') {
+    if (effect.kind === 'tape') {
       const length = Math.max(.20, 1 - Math.abs(progress - .32) / .68)
       const endX = effect.x + dx * length
       const endZ = effect.z + dz * length
@@ -441,9 +436,6 @@ export function createGameView(host: HTMLElement) {
         const z = effect.z + dz * fraction
         line(x, z, x + sideX, z + sideZ, .045, RUST, .135)
       }
-    } else if (effect.kind === 'mallet') {
-      marker(effect.x, effect.z, .6 + progress * reach, GOLD, .071)
-      marker(effect.x, effect.z, .34 + progress * reach * (run.ranks.mallet >= 3 ? .92 : .75), RUST, .073)
     } else if (effect.kind === 'wrench') {
       const radius = .46 + reach * (.34 + .38 * progress)
       for (let i = 0; i < 7; i++) {
@@ -451,15 +443,6 @@ export function createGameView(host: HTMLElement) {
         const a = heading - spread + i * (spread * 2 / 7)
         const b = a + spread * .28
         line(effect.x + Math.cos(a) * radius, effect.z + Math.sin(a) * radius, effect.x + Math.cos(b) * radius, effect.z + Math.sin(b) * radius, .21 * (1 - progress) + .035, GOLD, .11)
-      }
-    } else if (effect.kind === 'saw') {
-      const sideX = -Math.sin(heading)
-      const sideZ = Math.cos(heading)
-      for (let i = 0; i < 8; i++) {
-        const along = .13 + i * .1
-        const spread = run.ranks.saw >= 3 ? .7 : .46
-        const side = (i % 2 ? spread : -spread) + Math.sin(progress * 10) * .23
-        line(effect.x + dx * along + sideX * side, effect.z + dz * along + sideZ * side, effect.x + dx * (along + .12) - sideX * side, effect.z + dz * (along + .12) - sideZ * side, .073, i % 2 ? ICE : MINT, .13)
       }
     }
   }
@@ -590,14 +573,17 @@ export function createGameView(host: HTMLElement) {
     }
 
     const dashing = run.tick < player.dashUntil && player.moving
-    const strokeKind = run.activeTool === 'caliper' ? 'slice' : run.activeTool
     let stroke: RunEffect | undefined
     for (const effect of run.effects) {
-      if (effect.kind === strokeKind && run.tick - effect.from < 12 && effect.until > run.tick) {
+      if ((effect.kind === 'slice' || effect.kind === 'wrench' || effect.kind === 'tape') &&
+          run.tick - effect.from < 12 && effect.until > run.tick &&
+          (!stroke || effect.from >= stroke.from)) {
         stroke = effect
-        break
       }
     }
+    const equipped: ToolKind | null = stroke
+      ? (stroke.kind === 'slice' ? 'caliper' : stroke.kind as ToolKind)
+      : run.ranks.caliper ? 'caliper' : run.ranks.wrench ? 'wrench' : run.ranks.tape ? 'tape' : null
     const dx = dashing ? player.dashX : !player.moving && stroke ? stroke.toX - player.x : player.dx
     const dz = dashing ? player.dashZ : !player.moving && stroke ? stroke.toZ - player.z : player.dz
     const desired = Math.atan2(dx, dz)
@@ -608,7 +594,7 @@ export function createGameView(host: HTMLElement) {
     inspector.group.position.set(player.x, 0, player.z)
     inspector.group.scale.setScalar(1.18)
     const flash = Math.max(0, 1 - (run.tick - player.hurtAt) / 15)
-    inspector.pose(time, player.moving, dashing, stroke ? 1 - (run.tick - stroke.from) / 12 : 0, run.activeTool, flash)
+    inspector.pose(time, player.moving, dashing, stroke ? 1 - (run.tick - stroke.from) / 12 : 0, equipped, flash)
     shadow(player.x - .06, player.z - .024, .46, .27)
     castShadow(player.x, player.z, .37, dashing ? .97 : .75)
     marker(player.x, player.z, .50, run.tick < run.boostUntil ? GOLD : MINT)

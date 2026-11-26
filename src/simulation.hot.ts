@@ -18,7 +18,6 @@ export const DASH_BUFFER = 8
 const DASH_TICKS = 13
 const DASH_SPEED = 15
 const DASH_STEP = DASH_SPEED / HZ
-const FILE_STROKE_GAP = 8
 const SURGE_WARNING = 105
 const PRESS_WARNING = 68
 const ENTRANCE_DISTANCE = 11.5
@@ -59,7 +58,7 @@ const incidentBatches: ReadonlyArray<readonly EnemyKind[]> = [
    'bolt', 'blank', 'blank', 'blank', 'phantom', 'phantom', 'bolt', 'blank', 'blank', 'blank',
    'phantom', 'blank', 'bolt', 'bolt', 'blank', 'blank'],
 ]
-export const BOSS_HP = 6500
+export const BOSS_HP = 13000
 export const HAZARD_BATCH = -2
 const TAU = Math.PI * 2
 
@@ -97,10 +96,7 @@ export const UPGRADES = {
   guard: { name: '缓冲护具', detail: '生命上限 +10，恢复 28 点', sprite: 'guard' },
   magnet: { name: '磁吸托盘', detail: '经验吸取距离 +0.46 米', sprite: 'magnet' },
   wrench: { name: '扳手', detail: '重击前方近身扇区，打断螺栓蓄力', sprite: 'wrench' },
-  file: { name: '锉刀', detail: '连续锉削三次，锉屑会擦到附近零件', sprite: 'file' },
-  saw: { name: '手锯', detail: '横向拉锯，扫中前方一整排零件', sprite: 'saw' },
   tape: { name: '卷尺', detail: '甩出长尺，贯穿同一直线上的目标', sprite: 'tape' },
-  mallet: { name: '橡皮锤', detail: '砸出近身冲击圈，震退周围零件', sprite: 'mallet' },
 } as const
 
 export const SHORTCUTS = {
@@ -122,34 +118,27 @@ export const SHORTCUTS = {
 
 export type UpgradeId = keyof typeof UPGRADES
 
-export const WEAPON_IDS = ['wrench', 'file', 'saw', 'tape', 'mallet'] as const
+export const WEAPON_IDS = ['wrench', 'tape'] as const
 export type WeaponId = typeof WEAPON_IDS[number]
 const weaponInfo: Record<WeaponId, { reach: number; delay: number; damage: number }> = {
   wrench: { reach: 4.66, delay: 55, damage: 55 },
-  file: { reach: 5.55, delay: 65, damage: 68 },
-  saw: { reach: 5.65, delay: 55, damage: 42 },
   tape: { reach: 9.20, delay: 50, damage: 39 },
-  mallet: { reach: 3.50, delay: 69, damage: 54 },
 }
 export const TOOL_IDS = ['caliper', ...WEAPON_IDS] as const
 export const WEAPON_SLOTS = TOOL_IDS.length
 export type ToolKind = typeof TOOL_IDS[number]
-const TOOL_DROP_TICKS = [18, 45, 78, 116, 154].map(seconds => seconds * HZ)
+const TOOL_DROP_TICKS = [22, 72].map(seconds => seconds * HZ)
 export const MAX_WEAPON_RANK = 5
 
 export const CALIBRATIONS = {
   caliper: '增加一处自动复测，额外命中一个邻近零件。',
   wrench: '扩大重击角度，可以打断冲撞中的螺栓。',
-  file: '三次锉削增至四次，锉屑波及更多邻近零件。',
-  saw: '加宽锯切范围，一次能扫到更宽的一排。',
   tape: '加宽卷尺命中线，覆盖挨得更开的零件。',
-  mallet: '加大击退力度，把围上来的零件推得更远。',
 } satisfies Record<ToolKind, string>
 
 function toolDamage(run: Run, id: ToolKind, rank: number) {
   if (id === 'caliper') return 22 + 7 * run.ranks.power + 7 * (rank - 1)
-  const base = weaponInfo[id].damage + (rank - 1) * 12 + run.ranks.power * 4
-  return id === 'file' && rank >= 3 ? Math.round(base * 1.20) : base
+  return weaponInfo[id].damage + (rank - 1) * 12 + run.ranks.power * 4
 }
 
 function toolReach(run: Run, id: ToolKind, rank: number) {
@@ -161,7 +150,7 @@ function toolReach(run: Run, id: ToolKind, rank: number) {
 function toolInterval(run: Run, id: ToolKind, rank: number) {
   return id === 'caliper'
     ? Math.max(14, 36 - 5 * run.ranks.tempo - 2 * (rank - 1))
-    : Math.max(id === 'file' ? 56 : 26, weaponInfo[id].delay - run.ranks.tempo * 4 - (rank - 1) * 5)
+    : Math.max(26, weaponInfo[id].delay - run.ranks.tempo * 4 - (rank - 1) * 5)
 }
 
 export function previewToolStats(run: Run, id: ToolKind, rank: number) {
@@ -182,12 +171,6 @@ export function weaponCount(run: Run) {
   for (const id of WEAPON_IDS) if (run.ranks[id] > 0) count++
   return count
 }
-
-export function equipTool(run: Run, tool: ToolKind) {
-  if (run.phase === 'ended' || run.choices.length || !run.ranks[tool] || tool === run.activeTool) return false
-  run.activeTool = tool
-  return true
-}
 export type ShortcutKind = keyof typeof SHORTCUTS
 export type EnemyKind = 'blank' | 'bolt' | 'phantom'
 export type EffectKind = 'slice' | 'hit' | 'impact' | 'dash' | 'pickup' | 'clear' | 'arrival' | 'toolPickup' | 'inspection' | WeaponId
@@ -199,9 +182,7 @@ const MAX_RANK = 6
 
 export const IDLE_INPUT: Input = { x: 0, z: 0, dash: false, accept: false }
 
-interface Filing { fileAt: number; fileHits: number; fileDamage: number }
-
-export interface Enemy extends Filing {
+export interface Enemy {
   batch: number
   active: boolean
   kind: EnemyKind
@@ -332,7 +313,6 @@ export interface Run {
   nextSurge: number
   inspections: { slot: number; tick: number; isolated: number; recovery: number }[]
   tools: ToolDrop[]
-  activeTool: ToolKind | null
   nextTool: number
   lastToolPicked: ToolKind | null
   effects: RunEffect[]
@@ -344,7 +324,7 @@ export interface Run {
   xp: number
   xpGoal: number
   boostUntil: number
-  nextAttack: number
+  nextAttacks: Record<ToolKind, number>
   nextSpawn: number
   nextShortcut: number
   enemyCursor: number
@@ -355,7 +335,7 @@ export interface Run {
   passes: number
   beautifiers: number
   hazardDamage: number
-  boss: Filing & {
+  boss: {
     x: number
     z: number
     hp: number
@@ -385,7 +365,6 @@ function emptyEnemy(): Enemy {
   return {
     batch: -1, active: false, kind: 'blank', x: 0, z: 0, hp: 0, speed: 0, radius: 0,
     facing: 1, mode: 0, until: 0, actionAt: 0, dx: 0, dz: 0, flashUntil: 0,
-    fileAt: 0, fileHits: 0, fileDamage: 0,
   }
 }
 
@@ -403,19 +382,19 @@ export function createRun(seed = 0x41c603a1): Run {
     shards: Array.from({ length: MAX_SHARDS }, () => ({ active: false, x: 0, z: 0, value: 0, phase: 0 })),
     projectiles: Array.from({ length: MAX_BOLTS }, () => ({ active: false, x: 0, z: 0, dx: 0, dz: 0, hazard: false })),
     shortcuts: [], incident: null, surge: null, nextSurge: 0, inspections: [],
-    tools: [{ active: true, kind: 'caliper', x: 1.55, z: 0.6 }], activeTool: null, nextTool: 0, lastToolPicked: null,
+    tools: [{ active: true, kind: 'caliper', x: 1.55, z: 0.6 }], nextTool: 0, lastToolPicked: null,
     effects: Array.from({ length: 64 }, () => ({ kind: 'hit', x: 0, z: 0, toX: 0, toZ: 0, from: 0, until: 0 })),
     waves: Array.from({ length: 12 }, () => ({
       active: false, sequence: 0, warnAt: 0, pulseAt: 0, gap: 0, gapCenter: 0, radius: 0, crossed: false, crossedSafely: false,
     })),
     choices: [],
-    ranks: { caliper: 0, power: 0, tempo: 0, reach: 0, sweep: 0, stride: 0, guard: 0, magnet: 0, wrench: 0, file: 0, saw: 0, tape: 0, mallet: 0 },
+    ranks: { caliper: 0, power: 0, tempo: 0, reach: 0, sweep: 0, stride: 0, guard: 0, magnet: 0, wrench: 0, tape: 0 },
     kills: 0, level: 1, xp: 0, xpGoal: 12, boostUntil: 0,
-    nextAttack: 32, nextSpawn: 85, nextShortcut: 0,
+    nextAttacks: { caliper: 32, wrench: 32, tape: 32 }, nextSpawn: 85, nextShortcut: 0,
     enemyCursor: 0, shardCursor: 0, boltCursor: 0, effectCursor: 0,
     accepted: [], passes: 0, beautifiers: 0, hazardDamage: 0,
     boss: { x: 0, z: -1.1, hp: BOSS_HP, active: false, flashUntil: 0, nextWave: 0, waveSets: 0,
-      fileAt: 0, fileHits: 0, fileDamage: 0, pressAfterSet: 0, press: null },
+      pressAfterSet: 0, press: null },
   }
 
   const opening: GroundPoint[] = []
@@ -446,7 +425,7 @@ export function waveGapDegrees(run: Run) {
   return Math.max(60, BASE_GAP_DEGREES - 20 * run.beautifiers)
 }
 
-export function attackInterval(run: Run, tool = run.activeTool ?? 'caliper') {
+export function attackInterval(run: Run, tool: ToolKind = 'caliper') {
   const normal = toolInterval(run, tool, run.ranks[tool])
   return run.tick < run.boostUntil ? Math.ceil(normal / 2) : normal
 }
@@ -481,9 +460,6 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1,
     enemy.dx = 0
     enemy.dz = 0
     enemy.flashUntil = 0
-    enemy.fileAt = 0
-    enemy.fileHits = 0
-    enemy.fileDamage = 0
     run.enemyCursor = (index + 1) % enemies.length
     return
   }
@@ -691,28 +667,13 @@ function damageBoss(run: Run, damage: number) {
   addEffect(run, 'hit', boss.x, boss.z, 0, 0, 12)
 }
 
-function startFiling(run: Run, target: Enemy | Run['boss'], damage: number, strokes: number) {
-  const initial = damage * .57
-  if ('batch' in target) {
-    damageEnemy(run, target, initial)
-    if (!target.active) return
-  } else {
-    damageBoss(run, initial)
-    if (target.hp <= 0) return
-  }
-  target.fileDamage = (damage - initial) / (strokes - 1)
-  target.fileHits = strokes - 1
-  target.fileAt = run.tick + 3
-}
-
 function inToolShape(id: WeaponId, x: number, z: number, dx: number, dz: number, reach: number, calibrated: boolean) {
   const distance = Math.hypot(x, z)
-  if (id === 'mallet') return distance <= reach
   const forward = x * dx + z * dz
   if (forward < 0 || forward > reach) return false
   if (id === 'wrench') return distance <= reach && forward >= distance * (calibrated ? .12 : .40)
   const side = Math.abs(z * dx - x * dz)
-  return side <= (id === 'saw' ? (calibrated ? 1.71 : 1.18) : (calibrated ? .82 : .52))
+  return side <= (calibrated ? .82 : .52)
 }
 
 function attackWithWeapon(run: Run, id: WeaponId) {
@@ -734,47 +695,33 @@ function attackWithWeapon(run: Run, id: WeaponId) {
   const dirZ = distance > .01 ? dz / distance : 0
   const damage = toolDamage(run, id, rank)
 
-  if (id === 'file') {
-    const strokes = calibrated ? 4 : 3
-    startFiling(run, aim, damage, strokes)
-    const spread = calibrated ? 4.1 : 3.05
-    let grazed = 0
-    for (const adjacent of run.enemies) {
-      if (!adjacent.active || adjacent === aim || Math.hypot(adjacent.x - aim.x, adjacent.z - aim.z) > spread) continue
-      startFiling(run, adjacent, damage * .70, strokes)
-      if (++grazed >= (calibrated ? 5 : 3)) break
+  for (const target of run.enemies) {
+    if (!target.active ||
+        !inToolShape(id, target.x - player.x, target.z - player.z, dirX, dirZ, reach, calibrated)) continue
+    damageEnemy(run, target, damage)
+    if (!target.active) continue
+    if (id === 'wrench' && target.kind === 'bolt' && (target.mode === 1 || (calibrated && target.mode === 2))) {
+      target.mode = 0
+      target.actionAt = run.tick + 77
     }
-    addEffect(run, id, player.x, player.z, aim.x, aim.z, 29)
-  } else {
-    for (const target of run.enemies) {
-      if (!target.active ||
-          !inToolShape(id, target.x - player.x, target.z - player.z, dirX, dirZ, reach, calibrated)) continue
-      damageEnemy(run, target, damage)
-      if (!target.active) continue
-      if (id === 'wrench' && target.kind === 'bolt' && (target.mode === 1 || (calibrated && target.mode === 2))) {
-        target.mode = 0
-        target.actionAt = run.tick + 77
-      } else if (id === 'mallet') {
-        const awayX = target.x - player.x
-        const awayZ = target.z - player.z
-        const length = Math.hypot(awayX, awayZ) || 1
-        const push = calibrated ? 1.65 : 1.05
-        moveOnFloor(target, awayX / length * push, awayZ / length * push, target.radius)
-      }
-    }
-    if (boss.active && inToolShape(id, boss.x - player.x, boss.z - player.z, dirX, dirZ, reach + .45, calibrated)) {
-      damageBoss(run, damage)
-    }
-    addEffect(run, id, player.x, player.z, player.x + dirX * reach, player.z + dirZ * reach, 28)
   }
+  if (boss.active && inToolShape(id, boss.x - player.x, boss.z - player.z, dirX, dirZ, reach + .45, calibrated)) {
+    damageBoss(run, damage)
+  }
+  addEffect(run, id, player.x, player.z, player.x + dirX * reach, player.z + dirZ * reach, 28)
   return Signal.strike
 }
 
 function attack(run: Run) {
-  const tool = run.activeTool
-  if (!tool || run.tick < run.nextAttack) return 0
-  const signal = tool === 'caliper' ? attackWithCaliper(run) : attackWithWeapon(run, tool)
-  if (signal) run.nextAttack = run.tick + attackInterval(run, tool)
+  let signal = 0
+  for (const tool of TOOL_IDS) {
+    if (!run.ranks[tool] || run.tick < run.nextAttacks[tool]) continue
+    const hit = tool === 'caliper' ? attackWithCaliper(run) : attackWithWeapon(run, tool)
+    if (hit) {
+      run.nextAttacks[tool] = run.tick + attackInterval(run, tool)
+      signal |= hit
+    }
+  }
   return signal
 }
 
@@ -892,12 +839,6 @@ function moveEnemies(run: Run) {
   for (let index = 0; index < run.enemies.length; index++) {
     const enemy = run.enemies[index]
     if (!enemy.active) continue
-    if (enemy.fileHits > 0 && run.tick >= enemy.fileAt) {
-      enemy.fileHits--
-      enemy.fileAt += FILE_STROKE_GAP
-      damageEnemy(run, enemy, enemy.fileDamage)
-      if (!enemy.active) continue
-    }
     const dx = player.x - enemy.x
     const dz = player.z - enemy.z
     const distance = Math.max(.001, Math.hypot(dx, dz))
@@ -1070,10 +1011,7 @@ function collectTools(run: Run) {
   if (!tool) return 0
   tool.active = false
   run.ranks[tool.kind] = Math.max(1, run.ranks[tool.kind])
-  if (!run.activeTool && (!run.training || tool.kind === 'caliper')) {
-    equipTool(run, tool.kind)
-    run.nextAttack = Math.min(run.nextAttack, run.tick + 18)
-  }
+  run.nextAttacks[tool.kind] = Math.min(run.nextAttacks[tool.kind], run.tick + 18)
   run.lastToolPicked = tool.kind
   addEffect(run, 'toolPickup', tool.x, tool.z, 0, 0, 33)
   return Signal.toolPickup
@@ -1222,8 +1160,7 @@ function proposeUpgrades(run: Run) {
   run.level++
   run.xpGoal = 14 + (run.level - 1) * 6
   const ownedTools = available.filter(id => id === 'caliper' || isWeapon(id))
-  const eligibleTool = run.activeTool && ownedTools.includes(run.activeTool)
-    ? run.activeTool : ownedTools[Math.floor(random(run) * ownedTools.length)]
+  const eligibleTool = ownedTools[Math.floor(random(run) * ownedTools.length)]
   if (eligibleTool) {
     run.choices.push(eligibleTool)
     available.splice(available.indexOf(eligibleTool), 1)
@@ -1422,12 +1359,6 @@ export function advanceRun(run: Run, input: Input) {
   signal |= collectShards(run)
   if (run.phase === 'boss') {
     if (Math.hypot(run.player.x - run.boss.x, run.player.z - run.boss.z) < 1.35) signal |= hurt(run, 17)
-    const boss = run.boss
-    if (boss.fileHits > 0 && run.tick >= boss.fileAt) {
-      boss.fileHits--
-      boss.fileAt += FILE_STROKE_GAP
-      damageBoss(run, boss.fileDamage)
-    }
     signal |= progressWaves(run)
   }
 
@@ -1475,7 +1406,9 @@ export function placePracticePass(run: Run) {
     parts: [],
     inspection: { ...nearestFreePoint(player.x + direction * 4.85, player.z, INSPECTION_RADIUS + .08), held: 0 },
   }
-  run.nextAttack = Infinity
+  run.nextAttacks.caliper = Infinity
+  run.nextAttacks.wrench = Infinity
+  run.nextAttacks.tape = Infinity
   run.xp = 0
   run.xpGoal = Infinity
   for (const shard of run.shards) shard.active = false
@@ -1492,7 +1425,9 @@ export function beginPracticeWave(run: Run) {
   run.player.z = .2
   run.player.dashUntil = run.tick
   run.player.dashReadyAt = run.tick
-  run.nextAttack = run.tick + 30
+  run.nextAttacks.caliper = run.tick + 30
+  run.nextAttacks.wrench = run.tick + 30
+  run.nextAttacks.tape = run.tick + 30
   introduceBoss(run)
   run.boss.hp = Infinity
   run.boss.nextWave = run.tick + 53
@@ -1504,8 +1439,9 @@ export function placePracticeToolTarget(run: Run) {
   for (const shard of run.shards) shard.active = false
   run.xp = 0
   run.xpGoal = Infinity
-  run.activeTool = null
-  run.nextAttack = run.tick + 17
+  run.nextAttacks.caliper = Infinity
+  run.nextAttacks.wrench = run.tick + 17
+  run.nextAttacks.tape = Infinity
   const side = player.x > ARENA.x - 4.1 ? -1 : 1
   run.tools.push({ active: true, kind: 'wrench', ...nearestFreePoint(player.x + side * 2.2, player.z, .72) })
   spawnEnemy(run, 'bolt', player.x + side * 4.75, player.z)

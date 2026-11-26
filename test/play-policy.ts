@@ -14,9 +14,8 @@ export function pickTestUpgrade(run: Run) {
   for (let i = 0; i < run.choices.length; i++) {
     const option = run.choices[i]
     const preference = option === 'guard' && run.player.hp < 76 ? 24
-      : option === run.activeTool ? 18
-        : isWeapon(option) && (option === 'tape' || option === 'saw') ? 16
-      : option === 'sweep' && run.ranks.sweep < 3 ? 14
+      : option === 'caliper' || isWeapon(option) ? 16
+        : option === 'sweep' && run.ranks.sweep < 3 ? 14
         : option === 'power' ? 11
           : option === 'tempo' ? 10
             : option === 'reach' ? 8 : option === 'magnet' ? 7 : option === 'stride' ? 6 : 5
@@ -64,8 +63,7 @@ function bossMovement(run: Run): Input {
     earliest = untilHit
     targetAngle = wave.gapCenter
   }
-  const tool = run.activeTool
-  const radius = tool ? Math.min(3.85, previewToolStats(run, tool, run.ranks[tool]).reach - .25) : 3.85
+  const radius = run.ranks.wrench ? 3.55 : 3.85
   const moveX = run.boss.x + Math.cos(targetAngle) * radius - p.x
   const moveZ = run.boss.z + Math.sin(targetAngle) * radius - p.z
   const dash = earliest < 17 && angleDistance(angle, targetAngle) > 0.65 && distance > 2.3

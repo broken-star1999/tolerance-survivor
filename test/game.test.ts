@@ -3,7 +3,7 @@ import test from 'node:test'
 import { ARENA, PLAYER_CLEARANCE, STATIONS, isOpenFloor, type GroundPoint } from '../src/floor-plan.ts'
 import {
   BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HAZARD_BATCH, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
-  chooseUpgrade, createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
+  chooseUpgrade, createPracticeRun, createRun, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
   type Run,
 } from '../src/simulation.hot.ts'
 import { pickTestUpgrade, testInput } from './play-policy.ts'
@@ -12,6 +12,12 @@ function emptyFloor(run: Run) {
   for (const enemy of run.enemies) enemy.active = false
   run.nextSpawn = Infinity
   run.nextSurge = SURGES.length
+}
+
+function pauseAttacks(run: Run) {
+  run.nextAttacks.caliper = Infinity
+  run.nextAttacks.wrench = Infinity
+  run.nextAttacks.tape = Infinity
 }
 
 function getShortcut(run: Run, slot: number) {
@@ -64,7 +70,7 @@ test('the first upgrade pauses simulation until a valid selection', () => {
 
 test('the pass clears all active enemies, retains XP and records a single hazard', () => {
   const run = createRun(19)
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   run.nextSpawn = Infinity
   const shortcut = getShortcut(run, 0)
   const enemyCount = run.enemies.filter(enemy => enemy.active).length
@@ -112,7 +118,7 @@ test('the three shortcuts alter width and cadence while every actual wave keeps 
       if (passes + beautifiers > 3) continue
       const run = createRun(76)
       emptyFloor(run)
-      run.nextAttack = Infinity
+      pauseAttacks(run)
       run.passes = passes
       run.beautifiers = beautifiers
       run.tick = BOSS_TICK - 1
@@ -166,7 +172,7 @@ test('loss, timeout and a fresh run leave unambiguous results', () => {
 
 test('tools unlock on contact at Lv.1 and only picked tools can appear in upgrade choices', () => {
   const run = createRun(46)
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   emptyFloor(run)
   run.xp = run.xpGoal
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.level)
@@ -178,12 +184,10 @@ test('tools unlock on contact at Lv.1 and only picked tools can appear in upgrad
   run.player.z = caliper.z
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.toolPickup)
   assert.equal(run.ranks.caliper, 1)
-  assert.equal(run.activeTool, 'caliper')
   assert.equal(hazardValue(run), 0)
   run.tools.push({ active: true, kind: 'wrench', x: run.player.x, z: run.player.z })
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.toolPickup)
   assert.equal(run.ranks.wrench, 1)
-  assert.equal(run.activeTool, 'caliper')
   run.xp = run.xpGoal
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.level)
   assert.ok(run.choices.includes('caliper') || run.choices.includes('wrench'))
@@ -195,48 +199,46 @@ test('tools unlock on contact at Lv.1 and only picked tools can appear in upgrad
   assert.equal(run.tools.every(tool => !tool.active), true)
 })
 
-test('one equipped tool strikes and switching carries the current cooldown', () => {
+test('all unlocked tools strike simultaneously on independent cooldowns', () => {
   const run = createRun(81)
   emptyFloor(run)
-  assert.equal(equipTool(run, 'wrench'), false)
   run.ranks.caliper = 2
   run.ranks.wrench = 1
-  assert.equal(equipTool(run, 'caliper'), true)
-  run.nextAttack = 0
+  run.ranks.tape = 1
+  run.nextAttacks.caliper = 0
+  run.nextAttacks.wrench = 0
+  run.nextAttacks.tape = 0
   const part = run.enemies[0]
-  Object.assign(part, { active: true, x: 2, z: .6, speed: 0, hp: 300 })
+  Object.assign(part, { active: true, x: 2, z: .6, speed: 0, hp: 400 })
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.strike)
-  assert.ok(run.effects.some(effect => effect.kind === 'slice'))
-  assert.equal(run.effects.some(effect => effect.kind === 'wrench'), false)
-  const ready = run.nextAttack
-  assert.equal(equipTool(run, 'wrench'), true)
-  assert.equal(run.ranks.caliper, 2)
-  assert.equal(run.nextAttack, ready)
-  while (run.tick + 1 < ready) assert.equal(advanceRun(run, IDLE_INPUT) & Signal.strike, 0)
-  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.strike)
+  assert.ok(run.effects.some(effect => effect.kind === 'slice' && effect.from === run.tick))
   assert.ok(run.effects.some(effect => effect.kind === 'wrench' && effect.from === run.tick))
+  assert.ok(run.effects.some(effect => effect.kind === 'tape' && effect.from === run.tick))
+  assert.equal(run.nextAttacks.caliper, run.tick + attackInterval(run, 'caliper'))
+  assert.equal(run.nextAttacks.wrench, run.tick + attackInterval(run, 'wrench'))
+  assert.equal(run.nextAttacks.tape, run.tick + attackInterval(run, 'tape'))
 })
 
-test('wrench cancels charging, and a file delivers its damage in three discrete strokes', () => {
+test('wrench cancels charging, and tape pierces targets along its line', () => {
   const run = createRun(81)
   emptyFloor(run)
-  run.nextAttack = 0
+  pauseAttacks(run)
   const bolt = run.enemies[0]
-  Object.assign(bolt, { active: true, kind: 'bolt', x: 1.55, z: 0.6, speed: .1, mode: 1, until: 200, hp: 250 })
+  Object.assign(bolt, { active: true, kind: 'bolt', x: 1.55, z: 0.6, speed: 0, mode: 1, until: 200, hp: 300 })
   run.ranks.wrench = 1
-  assert.equal(equipTool(run, 'wrench'), true)
+  run.nextAttacks.wrench = 0
   advanceRun(run, IDLE_INPUT)
   assert.equal(bolt.mode, 0)
   const afterWrench = bolt.hp
-  run.ranks.file = 1
-  assert.equal(equipTool(run, 'file'), true)
-  run.nextAttack = run.tick
+
+  const rear = run.enemies[1]
+  Object.assign(rear, { active: true, kind: 'blank', x: 4.55, z: 0.6, speed: 0, hp: 100 })
+  run.ranks.tape = 1
+  run.nextAttacks.tape = 0
   advanceRun(run, IDLE_INPUT)
-  assert.equal(bolt.fileHits, 2)
-  assert.ok(bolt.hp < afterWrench)
-  for (let i = 0; i < 25; i++) advanceRun(run, IDLE_INPUT)
-  assert.equal(bolt.fileHits, 0)
-  assert.ok(Math.abs(bolt.hp - (afterWrench - previewToolStats(run, 'file', 1).damage)) < .0001)
+  const tapeDamage = previewToolStats(run, 'tape', 1).damage
+  assert.equal(bolt.hp, afterWrench - tapeDamage)
+  assert.equal(rear.hp, 100 - tapeDamage)
 })
 
 test('the training pass and training pickups are isolated from a new shift', () => {
@@ -257,7 +259,7 @@ test('first batch is marked before the choice and supplies a real group for insp
   const run = createRun(123)
   emptyFloor(run)
   run.player.protectedUntil = Infinity
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   run.tick = SHORTCUT_TICKS[0] - 2 * HZ - 1
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.incidentWarning)
   assert.equal(run.incident?.stage, 'warning')
@@ -282,8 +284,7 @@ test('pausing to read a lesson leaves its wrench practice target available', () 
   run.player.x = wrench.x
   run.player.z = wrench.z
   advanceRun(run, IDLE_INPUT)
-  assert.equal(run.activeTool, null)
-  assert.equal(equipTool(run, 'wrench'), true)
+  assert.equal(run.ranks.wrench, 1)
   const x = bolt.x - run.player.x
   const z = bolt.z - run.player.z
   for (let i = 0; i < HZ; i++) advanceRun(run, { x, z, dash: false, accept: false })
@@ -292,7 +293,7 @@ test('pausing to read a lesson leaves its wrench practice target available', () 
 
 test('inspection requires staying put, isolates only its batch and closes the shortcut', () => {
   const run = createRun(33)
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   run.nextSpawn = Infinity
   run.player.protectedUntil = Infinity
   run.player.hp = 72
@@ -319,7 +320,7 @@ test('inspection requires staying put, isolates only its batch and closes the sh
 test('an unused incident expires without logging a decision or removing its parts', () => {
   const run = createRun(95)
   emptyFloor(run)
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   run.player.protectedUntil = Infinity
   const shortcut = getShortcut(run, 0)
   run.tick = run.incident!.closesAt - 1
@@ -334,7 +335,7 @@ test('an unused incident expires without logging a decision or removing its part
 test('a missed inspection prevents release even after the test rig is stopped with zero hazards', () => {
   const run = createRun(95)
   emptyFloor(run)
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   run.player.protectedUntil = Infinity
   getShortcut(run, 0)
   run.tick = run.incident!.closesAt - 1
@@ -356,21 +357,33 @@ test('a missed inspection prevents release even after the test rig is stopped wi
   assert.equal(run.outcome, 'pending')
 })
 
-test('the calibrated file delivers the higher previewed damage in four strokes', () => {
-  const run = createRun(81)
-  emptyFloor(run)
-  run.nextAttack = 0
-  const part = run.enemies[0]
-  Object.assign(part, { active: true, x: 1.55, z: 0.6, speed: .1, hp: 250 })
-  run.ranks.file = 3
-  assert.equal(equipTool(run, 'file'), true)
-  const expected = previewToolStats(run, 'file', 3).damage
-  assert.ok(expected > previewToolStats(run, 'file', 2).damage)
-  advanceRun(run, IDLE_INPUT)
-  assert.equal(part.fileHits, 3)
-  for (let i = 0; i < 36; i++) advanceRun(run, IDLE_INPUT)
-  assert.equal(part.fileHits, 0)
-  assert.ok(Math.abs(part.hp - (250 - expected)) < .0001)
+test('calibrated tape widens its piercing hit line and delivers previewed damage', () => {
+  const lv1 = createRun(81)
+  emptyFloor(lv1)
+  pauseAttacks(lv1)
+  const lv1Lead = lv1.enemies[0]
+  const lv1Side = lv1.enemies[1]
+  Object.assign(lv1Lead, { active: true, x: 2, z: 0.6, speed: 0, hp: 200 })
+  Object.assign(lv1Side, { active: true, x: 4, z: 0.6 + 0.68, speed: 0, hp: 200 })
+  lv1.ranks.tape = 1
+  lv1.nextAttacks.tape = 0
+  advanceRun(lv1, IDLE_INPUT)
+  assert.equal(lv1Side.hp, 200)
+
+  const lv3 = createRun(81)
+  emptyFloor(lv3)
+  pauseAttacks(lv3)
+  const lv3Lead = lv3.enemies[0]
+  const lv3Side = lv3.enemies[1]
+  Object.assign(lv3Lead, { active: true, x: 2, z: 0.6, speed: 0, hp: 200 })
+  Object.assign(lv3Side, { active: true, x: 4, z: 0.6 + 0.68, speed: 0, hp: 200 })
+  lv3.ranks.tape = 3
+  lv3.nextAttacks.tape = 0
+  const expected = previewToolStats(lv3, 'tape', 3).damage
+  assert.ok(expected > previewToolStats(lv3, 'tape', 2).damage)
+  advanceRun(lv3, IDLE_INPUT)
+  assert.equal(lv3Lead.hp, 200 - expected)
+  assert.equal(lv3Side.hp, 200 - expected)
 })
 
 test('a workstation stops a dash and lets a diagonal move slide along its face', () => {
@@ -617,7 +630,7 @@ test('hazard damage counts only hits caused by an extra or narrowed wave', () =>
 
   const extra = createRun(76)
   emptyFloor(extra)
-  extra.nextAttack = Infinity
+  pauseAttacks(extra)
   extra.passes = 1
   extra.tick = BOSS_TICK - 1
   assert.ok(advanceRun(extra, IDLE_INPUT) & Signal.boss)
@@ -634,7 +647,7 @@ test('hazard damage counts only hits caused by an extra or narrowed wave', () =>
 
   const base = createRun(76)
   emptyFloor(base)
-  base.nextAttack = Infinity
+  pauseAttacks(base)
   base.passes = 0
   base.tick = BOSS_TICK - 1
   assert.ok(advanceRun(base, IDLE_INPUT) & Signal.boss)
@@ -650,7 +663,7 @@ test('hazard damage counts only hits caused by an extra or narrowed wave', () =>
 test('shortcut hazards send returned parts into the boss phase and their hits count as hazard damage', () => {
   const run = createRun(76)
   emptyFloor(run)
-  run.nextAttack = Infinity
+  pauseAttacks(run)
   run.passes = 2
   run.tick = BOSS_TICK - 1
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.boss)

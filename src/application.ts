@@ -2,7 +2,7 @@ import {
   BOSS_HP, BOSS_TICK, CALIBRATIONS, DASH_BUFFER, DASH_COOLDOWN, HZ, INCIDENTS, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUTS,
   SHORTCUT_RADIUS, SHORTCUT_TICKS, SURGES, Signal, UPGRADES,
   TOOL_IDS, WEAPON_SLOTS, advanceRun, chooseUpgrade, previewToolStats,
-  createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestShortcut, nearestTool, surgeGroupAt, waveCount, waveGapDegrees, weaponCount,
+  createPracticeRun, createRun, hazardValue, isWeapon, nearestShortcut, nearestTool, surgeGroupAt, waveCount, waveGapDegrees, weaponCount,
   type Input, type Run, type ToolKind,
 } from './simulation.hot.ts'
 import { createSound } from './sound.ts'
@@ -262,8 +262,7 @@ export function createApplication() {
     text(reviewValue, run.inspections.length + ' / ' + INCIDENTS.length)
     const boost = Math.ceil(Math.max(0, run.boostUntil - run.tick) / HZ)
     text(weaponStatus, boost > 0 ? '攻速 ×2 · ' + boost + ' 秒'
-      : run.activeTool ? '使用 ' + UPGRADES[run.activeTool].name
-      : weaponCount(run) > 0 ? '选择一把工具' : '拾取地上的卡尺')
+      : weaponCount(run) > 0 ? '已解锁工具自动出手' : '拾取地上的卡尺')
     const dashDelay = Math.max(0, run.player.dashReadyAt - run.tick)
     text(dashText, dashDelay === 0 ? '冲刺就绪' :
       run.player.dashBufferedUntil >= run.tick ? '冲刺已预备' : '冲刺恢复')
@@ -355,24 +354,15 @@ export function createApplication() {
   function updateGear() {
     if (!run) return
     weaponIcons.replaceChildren()
-    for (const [index, tool] of TOOL_IDS.entries()) {
+    for (const tool of TOOL_IDS) {
       if (!run.ranks[tool]) continue
       const definition = UPGRADES[tool]
-      const slot = document.createElement('button')
-      slot.type = 'button'
+      const slot = document.createElement('div')
       slot.className = 'weapon-chip'
       slot.dataset.tool = tool
       slot.classList.toggle('calibrated', run.ranks[tool] >= 3)
       slot.title = definition.name + ' · Lv.' + run.ranks[tool]
       slot.setAttribute('aria-label', slot.title)
-      slot.setAttribute('aria-pressed', String(run.activeTool === tool))
-      slot.setAttribute('aria-keyshortcuts', String(index + 1))
-      slot.disabled = lesson?.step === 'equip' && tool !== 'wrench'
-      slot.addEventListener('click', () => chooseTool(tool))
-      const hint = document.createElement('span')
-      hint.className = 'weapon-key'
-      hint.setAttribute('aria-hidden', 'true')
-      hint.textContent = String(index + 1)
       const picture = document.createElement('canvas')
       picture.width = 36
       picture.height = 36
@@ -380,21 +370,10 @@ export function createApplication() {
       view.icon(picture, definition.sprite)
       const rank = document.createElement('b')
       rank.textContent = 'Lv.' + run.ranks[tool]
-      slot.append(hint, picture, rank)
+      slot.append(picture, rank)
       weaponIcons.append(slot)
     }
     text(gearCount, '工具 ' + weaponCount(run) + ' / ' + WEAPON_SLOTS)
-  }
-
-  function chooseTool(tool: ToolKind) {
-    if (!run || paused || lesson?.step === 'done' || (lesson?.step === 'equip' && tool !== 'wrench')) return
-    if (!equipTool(run, tool)) return
-    for (const slot of weaponIcons.querySelectorAll<HTMLButtonElement>('.weapon-chip')) {
-      slot.setAttribute('aria-pressed', String(slot.dataset.tool === tool))
-    }
-    needsFrame = true
-    showLessonStep()
-    status()
   }
 
   function showLessonStep() {
@@ -414,13 +393,10 @@ export function createApplication() {
     if (lesson.step === 'wave' && reviewed) {
       line = '超差件已隔离。这轮只有基础冲击波，沿绿色箭头找缺口。'
     }
-    const choosingWrench = lesson.step === 'equip' && run?.ranks.wrench && run.activeTool !== 'wrench'
-    const usingWrench = lesson.step === 'equip' && run?.activeTool === 'wrench'
-    if (choosingWrench) line = '扳手已解锁。选中后才会出手。'
-    if (usingWrench) line = '现在只用扳手。靠近螺栓，试一次重击。'
+    const pickedWrench = lesson.step === 'equip' && Boolean(run?.ranks.wrench)
+    if (pickedWrench) line = '扳手已解锁，靠近螺栓即可自动重击。'
     text(lessonDetail, line)
-    const action = usingWrench ? '靠近螺栓'
-      : choosingWrench ? touchDevice.matches ? '点工具栏的扳手' : '按 2 或点扳手'
+    const action = pickedWrench ? '靠近螺栓'
       : touchDevice.matches ? copy.touch : copy.desktop
     lessonAction.hidden = !action || resolved
     text(lessonAction, action)
@@ -750,9 +726,7 @@ export function createApplication() {
     }
     if (signal & Signal.toolPickup && run.lastToolPicked) {
       updateGear()
-      if (!lesson) note(UPGRADES[run.lastToolPicked].name + ' · Lv.1', run.activeTool === run.lastToolPicked
-        ? '已装备。收集实测量块可以升级。'
-        : '已解锁，选中这把工具才会出手。', 145)
+      if (!lesson) note(UPGRADES[run.lastToolPicked].name + ' · Lv.1', '已加入自动出手。收集实测量块可以升级。', 145)
       sound.play('level')
     }
 
@@ -933,10 +907,7 @@ export function createApplication() {
       }
       return
     }
-    if (option !== undefined && !event.repeat) {
-      event.preventDefault()
-      chooseTool(TOOL_IDS[option])
-    } else if (event.code === 'Space') {
+    if (event.code === 'Space') {
       if (event.target instanceof HTMLButtonElement && event.target.matches('.weapon-chip:focus-visible, #touch-accept:focus-visible')) return
       event.preventDefault()
       if (!event.repeat) dashQueued = true

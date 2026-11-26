@@ -17,7 +17,7 @@ export const LESSON_COPY = {
     desktop: '走近实测量块', touch: '走近实测量块',
   },
   equip: {
-    number: 4, title: '试用新工具', line: '拿上扳手，靠近螺栓，试一次近身重击。',
+    number: 4, title: '试用新工具', line: '拿上扳手，靠近螺栓。解锁的工具会自动同时出手。',
     desktop: '走进扳手的绿圈', touch: '走进扳手的绿圈',
   },
   shortcut: {
@@ -61,7 +61,7 @@ export function advanceLesson(lesson: Lesson, run: Run, signal: number) {
   } else if (lesson.step === 'equip') {
     if ((signal & Signal.toolPickup) && run.lastToolPicked === 'wrench') lesson.marker = null
     if (!lesson.demonstrated && run.effects.some(effect => effect.from === run.tick &&
-        (effect.kind === 'wrench' || effect.kind === 'file' || effect.kind === 'saw' || effect.kind === 'tape' || effect.kind === 'mallet'))) {
+        (effect.kind === 'wrench' || effect.kind === 'tape'))) {
       lesson.demonstrated = true
       lesson.waitUntil = run.tick + 42
     }

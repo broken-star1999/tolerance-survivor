@@ -168,22 +168,6 @@ export function createInspector() {
   }
   wrench.box([.196, .018, .035], [.10, .035, .026], '#667f8a', .008)
 
-  const file = parts()
-  file.box([-.16, 0, 0], [.235, .120, .11], teal, .032)
-  file.box([-.043, 0, 0], [.06, .092, .09], warm, .015)
-  file.box([.167, 0, 0], [.366, .097, .052], '#83989e', .009)
-  for (const x of [.042, .094, .146, .198, .250, .302]) {
-    file.box([x, .034, .03], [.014, .049, .014], '#c1cbc1')
-  }
-
-  const saw = parts()
-  saw.box([.105, .031, 0], [.415, .143, .043], alloy, .006)
-  for (const x of [-.061, .005, .071, .137, .203, .269]) {
-    saw.box([x, -.055, 0], [.036, .047, .036], '#d8ded0', .004)
-  }
-  saw.box([-.213, 0, 0], [.164, .176, .085], warm, .032)
-  saw.box([-.215, .013, .05], [.084, .083, .028], rubber, .015)
-
   const tape = parts()
   tape.box([0, .019, 0], [.253, .220, .142], warm, .041)
   tape.box([-.022, .041, .01], [.215, .187, .142], yellow, .036)
@@ -191,16 +175,8 @@ export function createInspector() {
   tape.box([.186, -.040, .018], [.166, .044, .048], highlight, .006)
   tape.box([.260, -.053, .020], [.025, .066, .054], alloy, .006)
 
-  const mallet = parts()
-  mallet.box([.053, 0, 0], [.49, .075, .070], warm, .015)
-  mallet.box([.232, .04, 0], [.165, .257, .147], '#38525b', .027)
-  for (const side of [-1, 1]) {
-    mallet.box([.232, .04 + .122 * side, 0], [.174, .058, .151], rubber, .013)
-  }
-
   const tools: [ToolKind, Mesh][] = [
-    ['caliper', caliper], ['wrench', wrench.finish(surface)], ['file', file.finish(surface)],
-    ['saw', saw.finish(surface)], ['tape', tape.finish(surface)], ['mallet', mallet.finish(surface)],
+    ['caliper', caliper], ['wrench', wrench.finish(surface)], ['tape', tape.finish(surface)],
   ]
   for (const [, mesh] of tools) {
     mesh.position.set(.018, -.394, .147)
