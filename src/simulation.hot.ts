@@ -58,7 +58,7 @@ const incidentBatches: ReadonlyArray<readonly EnemyKind[]> = [
    'bolt', 'blank', 'blank', 'blank', 'phantom', 'phantom', 'bolt', 'blank', 'blank', 'blank',
    'phantom', 'blank', 'bolt', 'bolt', 'blank', 'blank'],
 ]
-export const BOSS_HP = 13000
+export const BOSS_HP = 14500
 export const HAZARD_BATCH = -2
 const TAU = Math.PI * 2
 
@@ -84,14 +84,15 @@ export const Signal = {
   pressWarning: 262144,
   pressImpact: 524288,
   hazardReturn: 1048576,
+  bossEnrage: 2097152,
 } as const
 
 export const UPGRADES = {
   caliper: { name: '游标卡尺', detail: '校准卡尺，提升它的伤害、量程和测量速度', sprite: 'caliper' },
   power: { name: '硬化量爪', detail: '每次测量伤害 +7', sprite: 'caliper' },
   tempo: { name: '快速读数', detail: '缩短测量间隔', sprite: 'pulse' },
-  reach: { name: '扩大量程', detail: '自动测量距离 +0.95 米', sprite: 'range' },
-  sweep: { name: '多点测量', detail: '一次测量额外命中附近一件', sprite: 'caliper' },
+  reach: { name: '扩大量程', detail: '游标卡尺自动测量距离 +0.95 米', sprite: 'range' },
+  sweep: { name: '多点测量', detail: '游标卡尺每次额外命中附近一件', sprite: 'caliper' },
   stride: { name: '防滑工靴', detail: '移动速度 +0.49 米/秒', sprite: 'boot' },
   guard: { name: '缓冲护具', detail: '生命上限 +10，恢复 28 点', sprite: 'guard' },
   magnet: { name: '磁吸托盘', detail: '经验吸取距离 +0.46 米', sprite: 'magnet' },
@@ -110,7 +111,7 @@ export const SHORTCUTS = {
   beautifier: {
     name: '数据一键美化器',
     action: '改写记录',
-    benefit: '测量速度翻倍，持续 12 秒',
+    benefit: '测量速度翻倍、移速 +20%，持续 12 秒',
     consequence: '事故冲击波缺口缩小 20°',
     trace: '美化记录掩盖了测量偏差',
   },
@@ -340,11 +341,14 @@ export interface Run {
     z: number
     hp: number
     active: boolean
+    enraged: boolean
+    bossEventAt: number
     flashUntil: number
     nextWave: number
     waveSets: number
     pressAfterSet: number
     press: PressStroke | null
+    presses: PressStroke[]
   }
 }
 
@@ -393,8 +397,8 @@ export function createRun(seed = 0x41c603a1): Run {
     nextAttacks: { caliper: 32, wrench: 32, tape: 32 }, nextSpawn: 85, nextShortcut: 0,
     enemyCursor: 0, shardCursor: 0, boltCursor: 0, effectCursor: 0,
     accepted: [], passes: 0, beautifiers: 0, hazardDamage: 0,
-    boss: { x: 0, z: -1.1, hp: BOSS_HP, active: false, flashUntil: 0, nextWave: 0, waveSets: 0,
-      pressAfterSet: 0, press: null },
+    boss: { x: 0, z: -1.1, hp: BOSS_HP, active: false, enraged: false, bossEventAt: -999, flashUntil: 0, nextWave: 0, waveSets: 0,
+      pressAfterSet: 0, press: null, presses: [] },
   }
 
   const opening: GroundPoint[] = []
@@ -444,13 +448,14 @@ function spawnEnemy(run: Run, kind: EnemyKind, x: number, z: number, batch = -1,
     const enemy = enemies[index]
     if (enemy.active) continue
     const time = run.tick / BOSS_TICK
+    const scale = time + 1.45 * time * time
     enemy.active = true
     enemy.kind = kind
     enemy.batch = batch
     enemy.radius = radius
     enemy.x = origin.x
     enemy.z = origin.z
-    enemy.hp = kind === 'bolt' ? 46 + 16 * time : kind === 'phantom' ? 27 + 12 * time : 16 + 8 * time
+    enemy.hp = kind === 'bolt' ? 62 + 88 * scale : kind === 'phantom' ? 34 + 54 * scale : 20 + 38 * scale
     const speed = kind === 'bolt' ? 1.45 : kind === 'phantom' ? 1.66 : 2.05
     enemy.speed = speed + time * 0.46 + random(run) * 0.28 + (batch < 0 ? 0 : .27)
     enemy.facing = 1
@@ -664,6 +669,10 @@ function damageBoss(run: Run, damage: number) {
   const boss = run.boss
   boss.hp = Math.max(0, boss.hp - damage)
   boss.flashUntil = run.tick + 7
+  if (!boss.enraged && boss.hp > 0 && boss.hp <= BOSS_HP * .5) {
+    boss.enraged = true
+    boss.bossEventAt = run.tick
+  }
   addEffect(run, 'hit', boss.x, boss.z, 0, 0, 12)
 }
 
@@ -773,7 +782,7 @@ function movePlayer(run: Run, input: Input) {
     signaled = startDash(run)
   }
   const dashing = run.tick < player.dashUntil
-  const walkSpeed = 4.9 + run.ranks.stride * 0.49
+  const walkSpeed = (4.9 + run.ranks.stride * 0.49) * (run.tick < run.boostUntil ? 1.2 : 1)
   const speed = dashing ? DASH_SPEED : walkSpeed
   const beforeX = player.x
   const beforeZ = player.z
@@ -1108,7 +1117,7 @@ function progressInspection(run: Run) {
   const player = run.player
   const inZone = Math.hypot(player.x - inspection.x, player.z - inspection.z) <= INSPECTION_RADIUS
   if (!inZone || run.tick < player.dashUntil) {
-    inspection.held = 0
+    inspection.held = Math.max(0, inspection.held - 2)
     return 0
   }
   inspection.held++
@@ -1201,9 +1210,30 @@ function introduceBoss(run: Run) {
   for (const bolt of run.projectiles) bolt.active = false
   for (const shortcut of run.shortcuts) shortcut.active = false
   run.boss.active = true
+  run.boss.bossEventAt = run.tick
   run.boss.nextWave = run.tick + 100
   run.player.protectedUntil = Math.max(run.player.protectedUntil, run.tick + 90)
   addEffect(run, 'arrival', run.boss.x, run.boss.z, 0, 0, 70)
+}
+
+function fireBossVolley(run: Run, count: number, offset: number, fromX = run.boss.x, fromZ = run.boss.z) {
+  const projectiles = run.projectiles
+  for (let k = 0; k < count; k++) {
+    const a = offset + k * TAU / count
+    for (let i = 0; i < projectiles.length; i++) {
+      const index = (run.boltCursor + i) % projectiles.length
+      const bolt = projectiles[index]
+      if (bolt.active) continue
+      bolt.active = true
+      bolt.x = fromX
+      bolt.z = fromZ
+      bolt.dx = Math.cos(a)
+      bolt.dz = Math.sin(a)
+      bolt.hazard = false
+      run.boltCursor = (index + 1) % projectiles.length
+      break
+    }
+  }
 }
 
 function scheduleWaves(run: Run): number {
@@ -1253,6 +1283,7 @@ function scheduleWaves(run: Run): number {
     }
     signal |= Signal.hazardReturn
   }
+  if (!run.training) fireBossVolley(run, boss.enraged ? 10 : 6, aimedAt + 0.25)
   return signal
 }
 
@@ -1260,47 +1291,79 @@ export function inPress(stroke: PressStroke, x: number, z: number, margin = 0): 
   return Math.abs(x - stroke.x) < stroke.halfX + margin && Math.abs(z - stroke.z) < stroke.halfZ + margin
 }
 
-function callPress(run: Run) {
+function callPress(run: Run, keepCadence = false) {
   const { boss, player } = run
   const alongX = boss.waveSets % 4 === 2
-  const halfX = alongX ? 2.65 : 1.43
-  const halfZ = alongX ? 1.43 : 2.65
-  boss.press = {
-    x: clamp(player.x + (player.moving ? player.dx * .85 : 0), -ARENA.x + halfX, ARENA.x - halfX),
-    z: clamp(player.z + (player.moving ? player.dz * .85 : 0), -ARENA.z + halfZ, ARENA.z - halfZ),
-    halfX, halfZ, warnAt: run.tick, strikesAt: run.tick + PRESS_WARNING,
+  const halfX = alongX ? (boss.enraged ? 3.0 : 2.65) : (boss.enraged ? 1.7 : 1.43)
+  const halfZ = alongX ? (boss.enraged ? 1.7 : 1.43) : (boss.enraged ? 3.0 : 2.65)
+  const strikesAt = run.tick + (boss.enraged ? 56 : PRESS_WARNING)
+  const x0 = clamp(player.x + (player.moving ? player.dx * .85 : 0), -ARENA.x + halfX, ARENA.x - halfX)
+  const z0 = clamp(player.z + (player.moving ? player.dz * .85 : 0), -ARENA.z + halfZ, ARENA.z - halfZ)
+  const sideX = x0 >= 0 ? -1 : 1
+  const sideZ = z0 >= 0 ? -1 : 1
+  const zones: PressStroke[] = [
+    { x: x0, z: z0, halfX, halfZ, warnAt: run.tick, strikesAt },
+    {
+      x: clamp(x0 + sideX * (halfX + halfZ + 1.35), -ARENA.x + halfZ, ARENA.x - halfZ),
+      z: clamp(z0 + sideZ * 1.4, -ARENA.z + halfX, ARENA.z - halfX),
+      halfX: halfZ, halfZ: halfX, warnAt: run.tick, strikesAt,
+    },
+  ]
+  if (boss.enraged) {
+    zones.push({
+      x: clamp(boss.x - sideX * 4.4, -ARENA.x + halfX, ARENA.x - halfX),
+      z: clamp(z0 - sideZ * (halfZ * 2 + 1.4), -ARENA.z + halfZ, ARENA.z - halfZ),
+      halfX, halfZ, warnAt: run.tick, strikesAt,
+    })
   }
+  boss.presses = zones
+  boss.press = zones[0]
   boss.pressAfterSet = boss.waveSets
-  boss.nextWave = run.tick + 146
+  if (!keepCadence) boss.nextWave = run.tick + 146
 }
 
 function progressWaves(run: Run) {
   let signal = 0
   const { boss, player } = run
   if (run.tick >= boss.nextWave) {
-    if (!run.training && boss.waveSets > 0 && boss.waveSets % 2 === 0 && boss.pressAfterSet !== boss.waveSets) {
+    if (!run.training && boss.enraged) {
+      signal |= scheduleWaves(run) | Signal.wave
+      if (boss.presses.length === 0) {
+        callPress(run, true)
+        signal |= Signal.pressWarning
+      }
+    } else if (!run.training && boss.waveSets > 0 && boss.waveSets % 2 === 0 && boss.pressAfterSet !== boss.waveSets) {
       callPress(run)
       signal |= Signal.pressWarning
     } else {
       signal |= scheduleWaves(run) | Signal.wave
     }
   }
-  const press = boss.press
-  if (press) {
-    if (run.tick === press.strikesAt) {
-      if (inPress(press, player.x, player.z, .18)) signal |= hurt(run, 26)
+  if (boss.presses.length > 0) {
+    const lead = boss.presses[0]
+    if (run.tick === lead.strikesAt) {
+      if (boss.presses.some(zone => inPress(zone, player.x, player.z, .18))) {
+        signal |= hurt(run, boss.enraged ? 42 : 36)
+      }
+      for (const zone of boss.presses) addEffect(run, 'impact', zone.x, zone.z, 0, 0, 24)
+      addEffect(run, 'arrival', lead.x, lead.z, 0, 0, 26)
+      if (!run.training) fireBossVolley(run, 4, boss.enraged ? 0.35 : 0, lead.x, lead.z)
       signal |= Signal.pressImpact
     }
-    if (run.tick >= press.strikesAt + 28) boss.press = null
+    if (run.tick >= lead.strikesAt + 28) {
+      boss.presses.length = 0
+      boss.press = null
+    }
   }
   const x = run.player.x - run.boss.x
   const z = run.player.z - run.boss.z
   const distance = Math.hypot(x, z)
   const angle = Math.atan2(z, x)
+  const waveSpeed = boss.enraged ? 11.6 : 9.7
 
   for (const wave of run.waves) {
     if (!wave.active || run.tick < wave.pulseAt) continue
-    wave.radius = 0.42 + (run.tick - wave.pulseAt) * 9.7 / HZ
+    wave.radius = 0.42 + (run.tick - wave.pulseAt) * waveSpeed / HZ
     if (!wave.crossed && Math.abs(wave.radius - distance) <= 0.48) {
       wave.crossed = true
       wave.crossedSafely = angleDistance(angle, wave.gapCenter) <= wave.gap / 2
@@ -1324,6 +1387,7 @@ function endRun(run: Run, cause: 'health' | 'timeout' | 'boss') {
   run.endCause = cause
   run.boss.active = false
   run.boss.press = null
+  run.boss.presses.length = 0
   run.choices.length = 0
   if (cause !== 'boss') run.outcome = 'stopped'
   else if (hazardValue(run) > 0) run.outcome = 'repair'
@@ -1353,7 +1417,15 @@ export function advanceRun(run: Run, input: Input) {
   }
 
   signal |= collectTools(run)
+  const wasEnraged = run.phase === 'boss' && run.boss.enraged
   signal |= attack(run)
+  if (run.phase === 'boss' && !wasEnraged && run.boss.enraged) {
+    signal |= Signal.bossEnrage
+    if (!run.boss.press) {
+      callPress(run)
+      signal |= Signal.pressWarning
+    }
+  }
   signal |= moveEnemies(run)
   signal |= moveProjectiles(run)
   signal |= collectShards(run)

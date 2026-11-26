@@ -305,6 +305,8 @@ test('inspection requires staying put, isolates only its batch and closes the sh
   assert.equal(station.held, INSPECTION_HOLD - 4)
   run.player.x = station.x + 1.6
   advanceRun(run, IDLE_INPUT)
+  assert.equal(station.held, INSPECTION_HOLD - 6)
+  for (let i = 0; i < Math.ceil(INSPECTION_HOLD / 2); i++) advanceRun(run, IDLE_INPUT)
   assert.equal(station.held, 0)
   run.player.x = station.x
   for (let i = 0; i < INSPECTION_HOLD - 1; i++) advanceRun(run, IDLE_INPUT)
@@ -601,15 +603,17 @@ test('the pressure head locks its ground zone and deals damage only at the indic
     run.boss.nextWave = run.tick + 1
     run.player.protectedUntil = 0
     assert.ok(advanceRun(run, IDLE_INPUT) & Signal.pressWarning)
+    assert.equal(run.boss.presses.length, 2)
     const press = run.boss.press!
     assert.equal(press.x, run.player.x)
     if (stepAway) run.player.z += press.halfZ + .6
     while (run.tick < press.strikesAt - 1) advanceRun(run, IDLE_INPUT)
     assert.equal(run.player.hp, 100)
     assert.ok(advanceRun(run, IDLE_INPUT) & Signal.pressImpact)
-    assert.equal(run.player.hp, stepAway ? 100 : 74)
+    assert.equal(run.player.hp, stepAway ? 100 : 64)
     for (let i = 0; i < 28; i++) advanceRun(run, IDLE_INPUT)
     assert.equal(run.boss.press, null)
+    assert.equal(run.boss.presses.length, 0)
   }
 })
 
@@ -637,6 +641,7 @@ test('hazard damage counts only hits caused by an extra or narrowed wave', () =>
   const extraWarningAt = extra.boss.nextWave
   while (extra.tick < extraWarningAt) advanceRun(extra, IDLE_INPUT)
   for (const enemy of extra.enemies) enemy.active = false
+  for (const bolt of extra.projectiles) bolt.active = false
   const [w0, w1] = extra.waves.filter(wave => wave.active)
   const sign = Math.sign(Math.atan2(Math.sin(w1.gapCenter - w0.gapCenter), Math.cos(w1.gapCenter - w0.gapCenter))) || 1
   placeAt(extra, w0.gapCenter - sign * 0.7)
@@ -653,6 +658,7 @@ test('hazard damage counts only hits caused by an extra or narrowed wave', () =>
   assert.ok(advanceRun(base, IDLE_INPUT) & Signal.boss)
   const baseWarningAt = base.boss.nextWave
   while (base.tick < baseWarningAt) advanceRun(base, IDLE_INPUT)
+  for (const bolt of base.projectiles) bolt.active = false
   const [bw0] = base.waves.filter(wave => wave.active)
   placeAt(base, bw0.gapCenter + Math.PI)
   while (!bw0.crossed) advanceRun(base, IDLE_INPUT)
@@ -688,4 +694,36 @@ test('shortcut hazards send returned parts into the boss phase and their hits co
   const before = run.hazardDamage
   advanceRun(run, IDLE_INPUT)
   assert.equal(run.hazardDamage - before, 15)
+})
+
+test('boss overdrive strengthens press strikes and fires radial projectile volleys', () => {
+  const run = createRun(94)
+  emptyFloor(run)
+  pauseAttacks(run)
+  run.tick = BOSS_TICK - 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.boss)
+  const warningAt = run.boss.nextWave
+  while (run.tick < warningAt) advanceRun(run, IDLE_INPUT)
+  assert.equal(run.projectiles.filter(bolt => bolt.active).length, 6)
+  for (const bolt of run.projectiles) bolt.active = false
+
+  run.boss.hp = Math.floor(run.boss.hp * 0.5) + 5
+  run.ranks.caliper = 1
+  run.nextAttacks.caliper = 0
+  run.player.x = run.boss.x + 2.5
+  run.player.z = run.boss.z
+  const sig = advanceRun(run, IDLE_INPUT)
+  assert.ok(sig & Signal.bossEnrage)
+  assert.equal(run.boss.enraged, true)
+  assert.ok(run.boss.press)
+  assert.equal(run.boss.presses.length, 3)
+  assert.equal(run.boss.press!.strikesAt - run.tick, 56)
+
+  for (const wave of run.waves) wave.active = false
+  run.boss.press = null
+  run.boss.presses.length = 0
+  run.boss.nextWave = run.tick + 1
+  run.boss.pressAfterSet = run.boss.waveSets
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.wave)
+  assert.equal(run.projectiles.filter(bolt => bolt.active).length, 10)
 })

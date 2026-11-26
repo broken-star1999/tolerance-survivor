@@ -98,10 +98,10 @@ const waveFragment = /* glsl */ [
   '  } else {',
   '    if (safe) discard;',
   '    float edge = r-radius;',
-  '    float crest = 1.0-smoothstep(.10,.52,abs(edge));',
-  '    float tail = smoothstep(-1.08,-.22,edge)*(1.0-step(-.16,edge));',
-  '    alpha = max(crest*.89,tail*.39);',
-  '    color = mix(red, vec3(1.0,.79,.48), 1.0-smoothstep(.018,.23,abs(edge)));',
+  '    float crest = 1.0-smoothstep(.16,.72,abs(edge));',
+  '    float tail = smoothstep(-1.45,-.24,edge)*(1.0-step(-.18,edge));',
+  '    alpha = max(crest*.96,tail*.52);',
+  '    color = mix(vec3(1.0,.20,.06), vec3(1.0,.88,.58), 1.0-smoothstep(.03,.30,abs(edge)));',
   '  }',
   '  if(alpha<.01) discard;',
   '  gl_FragColor = vec4(color,alpha);',
@@ -284,14 +284,19 @@ export function createGameView(host: HTMLElement) {
   const waveGeometry = new PlaneGeometry(40, 40)
   const wavers = Array.from({ length: 12 }, () => makeWaveMesh(waveGeometry))
   world.add(...wavers)
-  const pressMarker = new Mesh(new PlaneGeometry(1, 1), new ShaderMaterial({
+  const pressMaterial = new ShaderMaterial({
     vertexShader: waveVertex, fragmentShader: pressFragment, ...EMPTY_FLAGS,
     uniforms: { elapsed: { value: 0 }, hit: { value: 0 } },
-  }))
-  pressMarker.rotation.x = -Math.PI / 2
-  pressMarker.renderOrder = 9
-  pressMarker.visible = false
-  world.add(pressMarker)
+  })
+  const pressGeometry = new PlaneGeometry(1, 1)
+  const pressMarkers = Array.from({ length: 3 }, () => {
+    const marker = new Mesh(pressGeometry, pressMaterial)
+    marker.rotation.x = -Math.PI / 2
+    marker.renderOrder = 9
+    marker.visible = false
+    world.add(marker)
+    return marker
+  })
 
   const target = new WebGLRenderTarget(1, 1, {
     minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true, stencilBuffer: false,
@@ -624,13 +629,17 @@ export function createGameView(host: HTMLElement) {
       marker(boss.x, boss.z, 1.93, RUST)
       for (let i = 0; i < run.waves.length; i++) drawWave(run.waves[i], run, i)
       if (press) {
-        pressMarker.visible = true
-        pressMarker.position.set(press.x, .092, press.z)
-        pressMarker.scale.set(press.halfX * 2, press.halfZ * 2, 1)
-        pressMarker.material.uniforms.hit.value = warning ? 0 : 1
-        pressMarker.material.uniforms.elapsed.value = warning
+        pressMaterial.uniforms.hit.value = warning ? 0 : 1
+        pressMaterial.uniforms.elapsed.value = warning
           ? (run.tick - press.warnAt) / (press.strikesAt - press.warnAt)
           : (run.tick - press.strikesAt) / 28
+        for (let i = 0; i < boss.presses.length && i < pressMarkers.length; i++) {
+          const zone = boss.presses[i]
+          const mesh = pressMarkers[i]
+          mesh.visible = true
+          mesh.position.set(zone.x, .092, zone.z)
+          mesh.scale.set(zone.halfX * 2, zone.halfZ * 2, 1)
+        }
       }
     }
 
@@ -755,7 +764,7 @@ export function createGameView(host: HTMLElement) {
     markings.count = 0
     strips.count = 0
     testRig.group.visible = run?.boss.active ?? false
-    pressMarker.visible = false
+    for (const marker of pressMarkers) marker.visible = false
     for (const wave of wavers) wave.visible = false
     if (run) {
       drawFloor(run)
@@ -804,8 +813,9 @@ export function createGameView(host: HTMLElement) {
       const hurtShake = Math.max(0, 1 - (run.tick - run.player.hurtAt) / 12) * .18
       const press = run.boss.press
       const pressElapsed = press ? run.tick - press.strikesAt : -1
-      const pressShake = press && pressElapsed >= 0 && pressElapsed < 14 ? .28 * (1 - pressElapsed / 14) : 0
-      shake = Math.max(hurtShake, pressShake)
+      const pressShake = press && pressElapsed >= 0 && pressElapsed < 14 ? .42 * (1 - pressElapsed / 14) : 0
+      const eventShake = run.boss.active ? Math.max(0, 1 - (run.tick - run.boss.bossEventAt) / 22) * .38 : 0
+      shake = Math.max(hurtShake, pressShake, eventShake)
     }
     const renderX = shake > 0 ? cameraX + (Math.random() - .5) * 2 * shake : cameraX
     const renderZ = shake > 0 ? cameraZ + (Math.random() - .5) * 2 * shake : cameraZ

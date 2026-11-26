@@ -99,6 +99,7 @@ export function createApplication() {
   const level = element('level-text')
   const kills = element('kills-text')
   const bossMeter = element('boss-meter')
+  const bossName = element('boss-name')
   const bossFill = element('boss-fill')
   const waveInfo = element('wave-info')
   const incidentPanel = element('incident-panel')
@@ -245,11 +246,15 @@ export function createApplication() {
     text(level, '等级 ' + String(run.level).padStart(2, '0'))
     text(kills, '击退 ' + run.kills)
     stage.classList.toggle('boss-active', isBoss)
+    stage.classList.toggle('boss-enraged', isBoss && run.boss.enraged)
     show(bossMeter, isBoss)
     if (isBoss) {
       const press = run.boss.press
+      const pct = Math.ceil(run.boss.hp / BOSS_HP * 100)
       bossMeter.classList.toggle('press-active', !!press)
-      text(waveInfo, press ? run.tick < press.strikesAt ? '压头落区 · 离开标线' : '压头回升' :
+      bossMeter.classList.toggle('enraged', run.boss.enraged)
+      text(bossName, (run.boss.enraged ? '失稳试验台 · 过载 ' : '失稳试验台 · ') + pct + '%')
+      text(waveInfo, press ? run.tick < press.strikesAt ? run.boss.presses.length + ' 处压头落区 · 离开标线' : '压头回升' :
         waveCount(run) + ' 道波 · 缺口 ' + waveGapDegrees(run) + '°')
       meter(bossFill, run.boss.hp / BOSS_HP)
     }
@@ -457,7 +462,7 @@ export function createApplication() {
     upgradeScreen.hidden = true
     pauseScreen.hidden = true
     endScreen.hidden = true
-    stage.classList.remove('boss-active', 'incident-active')
+    stage.classList.remove('boss-active', 'boss-enraged', 'incident-active')
     workstation.dataset.mode = 'title'
     sound.setMode('menu')
     needsFrame = true
@@ -760,6 +765,10 @@ export function createApplication() {
     }
     if (signal & Signal.pressWarning) sound.play('wave')
     if (signal & Signal.pressImpact) sound.play('boss')
+    if (signal & Signal.bossEnrage) {
+      note('试验台过载', '冲击波提速，压头与脉冲弹幕全面加强！', 165, true)
+      sound.play('boss')
+    }
     if (signal & Signal.level) {
       sound.play('level')
       showUpgrades()

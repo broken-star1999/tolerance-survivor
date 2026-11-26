@@ -29,17 +29,19 @@ export function pickTestUpgrade(run: Run) {
 
 function bossMovement(run: Run): Input {
   const p = run.player
-  const press = run.boss.press
-  if (press && run.tick < press.strikesAt) {
-    if (!inPress(press, p.x, p.z, .28)) return { x: 0, z: 0, dash: false, accept: false }
+  const presses = run.boss.presses
+  if (presses.length > 0 && run.tick < presses[0].strikesAt) {
+    const hit = presses.find(zone => inPress(zone, p.x, p.z, .28))
+    if (!hit) return { x: 0, z: 0, dash: false, accept: false }
     let nearest = Infinity
     let targetX = p.x
     let targetZ = p.z
     for (const [x, z] of [
-      [press.x - press.halfX - .35, p.z], [press.x + press.halfX + .35, p.z],
-      [p.x, press.z - press.halfZ - .35], [p.x, press.z + press.halfZ + .35],
+      [hit.x - hit.halfX - .35, p.z], [hit.x + hit.halfX + .35, p.z],
+      [p.x, hit.z - hit.halfZ - .35], [p.x, hit.z + hit.halfZ + .35],
     ]) {
       if (Math.abs(x) > ARENA.x || Math.abs(z) > ARENA.z || stationContact(p.x, p.z, x, z, PLAYER_CLEARANCE) < 1) continue
+      if (presses.some(zone => inPress(zone, x, z, .22))) continue
       const score = Math.hypot(x - p.x, z - p.z) + (Math.hypot(x - run.boss.x, z - run.boss.z) < 1.7 ? 4 : 0)
       if (score >= nearest) continue
       nearest = score
