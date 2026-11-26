@@ -19,6 +19,8 @@ const yellow = '#e18a4b'
 const highlight = '#f3d087'
 const reflective = '#e2d6a8'
 const enamel = '#faf1d8'
+const HOT = new Color('#ffe2a6')
+const IDLE = new Color('#e08d59')
 
 // Parts attached to the same joint are merged into a single, vertex-coloured mesh.
 function parts() {
@@ -219,7 +221,7 @@ export function createInspector() {
     center.position.y = moving ? .041 * Math.abs(walk) + (dashing ? .042 : 0) : .011 * (1 + Math.sin(time * 3))
     head.rotation.x = -.65 * center.rotation.x
     for (const [kind, mesh] of tools) mesh.visible = kind === equipped
-    surface.emissive.setRGB(hit * .21, hit * .067, hit * .024)
+    surface.emissive.setRGB(hit * .5, hit * .18, hit * .08)
   }
 
   return { group, pose }
@@ -316,7 +318,7 @@ export function createTestRig() {
     housing.position.y = .97 + Math.sin(time * (charging ? 14 : 4.9)) * (charging ? .039 : .021)
     housing.rotation.y = -.19 + Math.sin(time * 1.12) * .075
     ram.position.y = 1.92 - ramTravel * .66
-    signalMaterial.color.set(charging ? '#ffe2a6' : '#e08d59')
+    signalMaterial.color.copy(charging ? HOT : IDLE)
     surface.emissive.setRGB(hit * .16, hit * .055, hit * .020)
   }
   return { group, pose }

@@ -32,8 +32,9 @@
       <section class="title-screen" id="title-screen" aria-labelledby="game-title">
         <div class="title-content">
           <div class="title-line" aria-hidden="true"><b></b><i></i><i></i><i></i></div>
+          <div class="title-eyebrow">智造清风 · 廉铸匠心</div>
           <h1 id="game-title" aria-label="公差幸存者">公差<span>幸存者</span></h1>
-          <p>拾起工训量具，守住试制产线。图纸有公差，记录要如实。</p>
+          <p>拾起工训量具，守住试制产线。以廉为尺：图纸有公差，记录要如实。</p>
           <div class="title-actions">
             <button class="action primary" type="button" id="start-button"><span class="play-icon">▶</span>开始值班<span class="enter-hint">↵</span></button>
             <button class="action secondary" type="button" id="learn-button">操作训练</button>
@@ -144,6 +145,7 @@
 
       <section class="overlay" id="end-screen" aria-labelledby="end-title" hidden>
         <div class="dialog end-dialog" role="dialog" aria-modal="true" aria-labelledby="end-title">
+          <div class="report-stamp" id="end-stamp" aria-hidden="true"></div>
           <div class="dialog-eyebrow" id="end-label">本班质检报告</div>
           <h2 id="end-title">验收通过</h2>
           <p class="dialog-text" id="end-reason"></p>
@@ -158,6 +160,7 @@
             <h3 id="report-history-title">处置追溯</h3>
             <ul id="end-log"></ul>
           </section>
+          <p class="end-motto" id="end-motto"></p>
           <div class="dialog-buttons">
             <button class="action primary" id="retry-button" type="button">再值一班</button>
             <button class="action secondary" id="end-home" type="button">返回标题</button>

@@ -59,7 +59,8 @@ const incidentBatches: ReadonlyArray<readonly EnemyKind[]> = [
    'bolt', 'blank', 'blank', 'blank', 'phantom', 'phantom', 'bolt', 'blank', 'blank', 'blank',
    'phantom', 'blank', 'bolt', 'bolt', 'blank', 'blank'],
 ]
-export const BOSS_HP = 4200
+export const BOSS_HP = 6500
+export const HAZARD_BATCH = -2
 const TAU = Math.PI * 2
 
 export const Signal = {
@@ -83,6 +84,7 @@ export const Signal = {
   surgeArrival: 131072,
   pressWarning: 262144,
   pressImpact: 524288,
+  hazardReturn: 1048576,
 } as const
 
 export const UPGRADES = {
@@ -231,6 +233,7 @@ interface Bolt {
   z: number
   dx: number
   dz: number
+  hazard: boolean
 }
 
 export interface ToolDrop { active: boolean; kind: ToolKind; x: number; z: number }
@@ -351,6 +354,7 @@ export interface Run {
   accepted: { slot: number; kind: ShortcutKind; tick: number }[]
   passes: number
   beautifiers: number
+  hazardDamage: number
   boss: Filing & {
     x: number
     z: number
@@ -397,7 +401,7 @@ export function createRun(seed = 0x41c603a1): Run {
     enemies: Array.from({ length: MAX_ENEMIES }, emptyEnemy),
     crowd: createCrowd(MAX_ENEMIES),
     shards: Array.from({ length: MAX_SHARDS }, () => ({ active: false, x: 0, z: 0, value: 0, phase: 0 })),
-    projectiles: Array.from({ length: MAX_BOLTS }, () => ({ active: false, x: 0, z: 0, dx: 0, dz: 0 })),
+    projectiles: Array.from({ length: MAX_BOLTS }, () => ({ active: false, x: 0, z: 0, dx: 0, dz: 0, hazard: false })),
     shortcuts: [], incident: null, surge: null, nextSurge: 0, inspections: [],
     tools: [{ active: true, kind: 'caliper', x: 1.55, z: 0.6 }], activeTool: null, nextTool: 0, lastToolPicked: null,
     effects: Array.from({ length: 64 }, () => ({ kind: 'hit', x: 0, z: 0, toX: 0, toZ: 0, from: 0, until: 0 })),
@@ -409,7 +413,7 @@ export function createRun(seed = 0x41c603a1): Run {
     kills: 0, level: 1, xp: 0, xpGoal: 12, boostUntil: 0,
     nextAttack: 32, nextSpawn: 85, nextShortcut: 0,
     enemyCursor: 0, shardCursor: 0, boltCursor: 0, effectCursor: 0,
-    accepted: [], passes: 0, beautifiers: 0,
+    accepted: [], passes: 0, beautifiers: 0, hazardDamage: 0,
     boss: { x: 0, z: -1.1, hp: BOSS_HP, active: false, flashUntil: 0, nextWave: 0, waveSets: 0,
       fileAt: 0, fileHits: 0, fileDamage: 0, pressAfterSet: 0, press: null },
   }
@@ -436,8 +440,10 @@ export function waveCycleTicks(run: Run) {
   return (6 - 0.5 * hazardValue(run)) * HZ
 }
 
+const BASE_GAP_DEGREES = 100
+
 export function waveGapDegrees(run: Run) {
-  return Math.max(60, 100 - 20 * run.beautifiers)
+  return Math.max(60, BASE_GAP_DEGREES - 20 * run.beautifiers)
 }
 
 export function attackInterval(run: Run, tool = run.activeTool ?? 'caliper') {
@@ -641,7 +647,7 @@ function damageEnemy(run: Run, enemy: Enemy, damage: number) {
   enemy.hp -= damage
   enemy.flashUntil = run.tick + 7
   if (enemy.hp <= 0) defeatEnemy(run, enemy)
-  addEffect(run, 'hit', enemy.x, enemy.z, 0, 0, 12)
+  addEffect(run, enemy.hp <= 0 ? 'impact' : 'hit', enemy.x, enemy.z, 0, 0, enemy.hp <= 0 ? 16 : 12)
 }
 
 function attackWithCaliper(run: Run) {
@@ -859,6 +865,7 @@ function fireProjectile(run: Run, enemy: Enemy) {
     bolt.z = enemy.z
     bolt.dx = enemy.dx
     bolt.dz = enemy.dz
+    bolt.hazard = enemy.batch === HAZARD_BATCH
     run.boltCursor = (index + 1) % projectiles.length
     return
   }
@@ -975,7 +982,9 @@ function moveEnemies(run: Run) {
       if (Math.abs(steerX) > .16) enemy.facing = Math.sign(steerX)
     }
     if (Math.hypot(player.x - enemy.x, player.z - enemy.z) < enemy.radius + 0.27) {
+      const before = player.hp
       signal |= hurt(run, enemy.kind === 'bolt' ? 15 : enemy.kind === 'phantom' ? 8 : 7)
+      if (enemy.batch === HAZARD_BATCH) run.hazardDamage += before - player.hp
     }
   }
   return signal
@@ -998,7 +1007,9 @@ function moveProjectiles(run: Run) {
       bolt.active = false
     } else if (Math.hypot(run.player.x - bolt.x, run.player.z - bolt.z) < 0.42) {
       bolt.active = false
+      const before = run.player.hp
       signal |= hurt(run, 11)
+      if (bolt.hazard) run.hazardDamage += before - run.player.hp
     }
   }
   return signal
@@ -1172,7 +1183,7 @@ function progressInspection(run: Run) {
     isolated++
   }
   const previousHp = player.hp
-  player.hp = Math.min(player.maximumHp, previousHp + 18)
+  player.hp = Math.min(player.maximumHp, previousHp + 26)
   run.inspections.push({ slot, tick: run.tick, isolated, recovery: player.hp - previousHp })
   addEffect(run, 'inspection', inspection.x, inspection.z, 0, 0, 54)
   closeIncident(run)
@@ -1258,7 +1269,8 @@ function introduceBoss(run: Run) {
   addEffect(run, 'arrival', run.boss.x, run.boss.z, 0, 0, 70)
 }
 
-function scheduleWaves(run: Run) {
+function scheduleWaves(run: Run): number {
+  let signal = 0
   const boss = run.boss
   const direction = boss.waveSets % 2 === 0 ? 1 : -1
   const aimedAt = Math.atan2(run.player.z - boss.z, run.player.x - boss.x) + direction * (0.52 + random(run) * 0.41)
@@ -1271,7 +1283,7 @@ function scheduleWaves(run: Run) {
     if (wave.active) continue
     wave.active = true
     wave.sequence = issued
-    wave.warnAt = run.tick + issued * 49
+    wave.warnAt = run.tick + issued * 62
     wave.pulseAt = wave.warnAt + 54
     wave.gap = gap
     wave.gapCenter = aimedAt + direction * issued * 0.34
@@ -1291,6 +1303,20 @@ function scheduleWaves(run: Run) {
       spawnEnemy(run, 'blank', point.x, point.z)
     }
   }
+  const hazard = hazardValue(run)
+  if (!run.training && hazard > 0 && boss.waveSets % 2 === 1) {
+    const placed: GroundPoint[] = []
+    for (let i = 0; i < hazard * 2; i++) {
+      const angle = random(run) * TAU
+      const point = findEntrance(run.player, boss.x + Math.cos(angle) * ENTRANCE_X, boss.z + Math.sin(angle) * ENTRANCE_Z, placed)
+      if (!point) continue
+      placed.push(point)
+      const kind: EnemyKind = i < run.passes * 2 ? 'bolt' : 'phantom'
+      spawnEnemy(run, kind, point.x, point.z, HAZARD_BATCH)
+    }
+    signal |= Signal.hazardReturn
+  }
+  return signal
 }
 
 export function inPress(stroke: PressStroke, x: number, z: number, margin = 0): boolean {
@@ -1319,8 +1345,7 @@ function progressWaves(run: Run) {
       callPress(run)
       signal |= Signal.pressWarning
     } else {
-      scheduleWaves(run)
-      signal |= Signal.wave
+      signal |= scheduleWaves(run) | Signal.wave
     }
   }
   const press = boss.press
@@ -1342,7 +1367,13 @@ function progressWaves(run: Run) {
     if (!wave.crossed && Math.abs(wave.radius - distance) <= 0.48) {
       wave.crossed = true
       wave.crossedSafely = angleDistance(angle, wave.gapCenter) <= wave.gap / 2
-      if (!wave.crossedSafely) signal |= hurt(run, 24)
+      if (!wave.crossedSafely) {
+        const before = player.hp
+        signal |= hurt(run, 24)
+        const lost = before - player.hp
+        const safeAtBase = angleDistance(angle, wave.gapCenter) <= BASE_GAP_DEGREES * Math.PI / 360
+        if (lost > 0 && (wave.sequence > 0 || safeAtBase)) run.hazardDamage += lost
+      }
     }
     if (wave.radius >= 19.6) wave.active = false
   }

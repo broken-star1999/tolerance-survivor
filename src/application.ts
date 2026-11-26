@@ -24,6 +24,18 @@ function text(target: HTMLElement, value: string) {
   if (target.textContent !== value) target.textContent = value
 }
 
+function show(target: HTMLElement, visible: boolean) {
+  if (target.hidden === visible) target.hidden = !visible
+}
+
+function setData(target: HTMLElement, key: string, value: string) {
+  if (target.dataset[key] !== value) target.dataset[key] = value
+}
+
+function setDisabled(target: HTMLButtonElement, value: boolean) {
+  if (target.disabled !== value) target.disabled = value
+}
+
 function meter(target: HTMLElement, value: number) {
   const amount = Math.max(0, Math.min(1, value)).toFixed(3)
   const transform = 'scaleX(' + amount + ')'
@@ -126,6 +138,7 @@ export function createApplication() {
   const resumeButton = element<HTMLButtonElement>('resume-button')
   const endScreen = element('end-screen')
   const endDialog = endScreen.querySelector<HTMLDivElement>('.end-dialog')!
+  const endStamp = element('end-stamp')
   const endTitle = element('end-title')
   const endReason = element('end-reason')
   const endTime = element('end-time')
@@ -134,6 +147,7 @@ export function createApplication() {
   const endReviews = element('end-reviews')
   const endImpact = element('end-impact')
   const endLog = element('end-log')
+  const endMotto = element('end-motto')
   const retryButton = element<HTMLButtonElement>('retry-button')
   const touch = element('touch-controls')
   const joystick = element('joystick')
@@ -168,6 +182,9 @@ export function createApplication() {
   let pointerSince = 0
   let dragAnywhere = false
   let frameRequest = 0
+  let needsFrame = true
+  let lastArrivals: readonly GroundPoint[] | undefined
+  let hazardNoted = false
 
   const held = new Set<string>()
   const frameInput: Input = { x: 0, z: 0, dash: false, accept: false }
@@ -214,6 +231,7 @@ export function createApplication() {
     const maximum = String(run.player.maximumHp)
     const isBoss = run.phase === 'boss'
     hud.classList.toggle('low-health', run.player.hp <= run.player.maximumHp * .27)
+    stage.classList.toggle('hurt', run.tick - run.player.hurtAt < 14)
     text(healthValue, hp + ' / ' + maximum)
     if (healthMeter.getAttribute('aria-valuenow') !== hp) healthMeter.setAttribute('aria-valuenow', hp)
     if (healthMeter.getAttribute('aria-valuemax') !== maximum) healthMeter.setAttribute('aria-valuemax', maximum)
@@ -224,7 +242,7 @@ export function createApplication() {
     text(level, '等级 ' + String(run.level).padStart(2, '0'))
     text(kills, '击退 ' + run.kills)
     stage.classList.toggle('boss-active', isBoss)
-    bossMeter.hidden = !isBoss
+    show(bossMeter, isBoss)
     if (isBoss) {
       const press = run.boss.press
       bossMeter.classList.toggle('press-active', !!press)
@@ -232,12 +250,12 @@ export function createApplication() {
         waveCount(run) + ' 道波 · 缺口 ' + waveGapDegrees(run) + '°')
       meter(bossFill, run.boss.hp / BOSS_HP)
     }
-    if (run.tick >= toastUntil) toast.hidden = true
+    if (run.tick >= toastUntil) show(toast, false)
     const hazard = hazardValue(run)
     text(riskValue, hazard + ' / ' + INCIDENTS.length)
     riskPanel.classList.toggle('risk-raised', hazard > 0)
     for (let i = 0; i < riskSegments.length; i++) riskSegments[i].classList.toggle('filled', i < hazard)
-    reviewCount.hidden = !!lesson
+    show(reviewCount, !lesson)
     text(reviewValue, run.inspections.length + ' / ' + INCIDENTS.length)
     const boost = Math.ceil(Math.max(0, run.boostUntil - run.tick) / HZ)
     text(weaponStatus, boost > 0 ? '攻速 ×2 · ' + boost + ' 秒'
@@ -254,14 +272,18 @@ export function createApplication() {
     }
     const activeIncident = run.phase === 'floor' ? run.incident : null
     const surge = run.phase === 'floor' ? run.surge : null
-    incidentPanel.hidden = (!activeIncident && !surge) || !!lesson || run.choices.length > 0 || paused
-    stage.classList.toggle('incident-active', !incidentPanel.hidden)
-    incidentReading.hidden = !activeIncident
+    const incidentOpen = (Boolean(activeIncident) || Boolean(surge)) && !lesson && run.choices.length === 0 && !paused
+    show(incidentPanel, incidentOpen)
+    stage.classList.toggle('incident-active', incidentOpen)
+    show(incidentReading, Boolean(activeIncident))
     const arrivals = activeIncident
       ? activeIncident.stage === 'warning' ? activeIncident.parts : undefined
       : surge?.groups[surge.issued]
-    incidentDirection.hidden = incidentPanel.hidden || !arrivals?.length
-    if (arrivals?.length && !incidentDirection.hidden) text(incidentDirection, entranceGuide(arrivals))
+    show(incidentDirection, incidentOpen && Boolean(arrivals?.length))
+    if (arrivals?.length && !incidentDirection.hidden && arrivals !== lastArrivals) {
+      lastArrivals = arrivals
+      text(incidentDirection, entranceGuide(arrivals))
+    }
     if (activeIncident) {
       const warning = activeIncident.stage === 'warning'
       const profile = INCIDENTS[activeIncident.slot]
@@ -270,22 +292,23 @@ export function createApplication() {
       text(incidentReading, batchReadings[activeIncident.slot].summary)
       text(incidentDetail, warning ? profile.detail
         : '绿圈复检 1.6 秒 · ' + (activeIncident.shortcut.kind === 'pass' ? '黄圈免检' : '紫圈改写'))
-      incidentPanel.dataset.stage = activeIncident.stage
+      setData(incidentPanel, 'stage', activeIncident.stage)
     } else if (surge) {
       const profile = SURGES[surge.slot]
       const next = surgeGroupAt(surge, surge.issued)
       text(incidentTitle, profile.title)
       text(incidentTime, surge.issued === surge.groups.length ? '入场中' : Math.ceil((next - run.tick) / HZ) + ' 秒')
       text(incidentDetail, profile.detail)
-      incidentPanel.dataset.stage = 'surge'
+      setData(incidentPanel, 'stage', 'surge')
     }
     const station = activeIncident?.stage === 'open' ? activeIncident.inspection : null
     const shortcut = run.phase === 'floor' ? nearestShortcut(run) : undefined
     const inspectionDistance = station ? Math.hypot(station.x - run.player.x, station.z - run.player.z) : Infinity
     const shortcutDistance = shortcut ? Math.hypot(shortcut.x - run.player.x, shortcut.z - run.player.z) : Infinity
     const hideControls = Boolean(run.choices.length) || paused
-    inspectionCard.hidden = !station || inspectionDistance > 3.15 || inspectionDistance > shortcutDistance || hideControls
-    if (station && !inspectionCard.hidden) {
+    const showInspection = Boolean(station) && inspectionDistance <= 3.15 && inspectionDistance <= shortcutDistance && !hideControls
+    show(inspectionCard, showInspection)
+    if (station && showInspection) {
       const fraction = station.held / INSPECTION_HOLD
       text(inspectionProgress, Math.floor(fraction * 100) + '%')
       text(inspectionHint, inspectionDistance <= INSPECTION_RADIUS
@@ -293,36 +316,37 @@ export function createApplication() {
         : '留在圈内 1.6 秒，核验并隔离本批')
       meter(inspectionFill, fraction)
     }
-    shortcutCard.hidden = !shortcut || !inspectionCard.hidden || hideControls
+    const showShortcut = Boolean(shortcut) && !showInspection && !hideControls
+    show(shortcutCard, showShortcut)
     const ready = shortcut && shortcutDistance < SHORTCUT_RADIUS
-    if (shortcut && !shortcutCard.hidden) {
+    if (shortcut && showShortcut) {
       const definition = SHORTCUTS[shortcut.kind]
-      if (shortcutCard.dataset.kind !== shortcut.kind) shortcutCard.dataset.kind = shortcut.kind
+      setData(shortcutCard, 'kind', shortcut.kind)
       text(shortcutName, definition.name)
       if (shortcut.kind === 'pass') {
         let remaining = 0
         for (const enemy of run.enemies) if (enemy.active) remaining++
-        text(shortcutBenefit, '立刻清场 · ' + remaining + ' 件零件')
-      } else text(shortcutBenefit, definition.benefit)
+        text(shortcutBenefit, '收益 · 清场 ' + remaining + ' 件零件')
+      } else text(shortcutBenefit, '收益 · ' + definition.benefit)
       const reading = activeIncident ? batchReadings[activeIncident.slot] : null
       const consequence = shortcut.kind === 'beautifier' && reading
         ? '原值 ' + reading.actual + ' → 改记 ' + reading.nominal
         : definition.trace
-      text(shortcutConsequence, consequence + ' · ' + definition.consequence)
+      text(shortcutConsequence, '代价 · ' + consequence + ' · ' + definition.consequence)
       text(shortcutAction, ready
         ? touchDevice.matches ? '点「' + definition.action + '」确认' : '确认' + definition.action
         : '进入提示圈后可操作')
     }
     const tool = nearestTool(run)
-    toolCard.hidden = !tool || Boolean(run.choices.length) || paused || !!shortcut || !inspectionCard.hidden || run.phase === 'ended'
+    show(toolCard, Boolean(tool) && run.choices.length === 0 && !paused && !shortcut && !showInspection && run.phase !== 'ended')
     if (tool) text(toolName, UPGRADES[tool.kind].name)
-    touchAccept.hidden = !ready
-    touchAccept.disabled = !ready
+    show(touchAccept, Boolean(ready))
+    setDisabled(touchAccept, !ready)
     if (ready) {
       text(touchAccept, SHORTCUTS[shortcut.kind].action)
-      if (touchAccept.dataset.kind !== shortcut.kind) touchAccept.dataset.kind = shortcut.kind
+      setData(touchAccept, 'kind', shortcut.kind)
     }
-    touchDash.disabled = dashDelay > DASH_BUFFER
+    setDisabled(touchDash, dashDelay > DASH_BUFFER)
   }
 
   function updateGear() {
@@ -365,6 +389,7 @@ export function createApplication() {
     for (const slot of weaponIcons.querySelectorAll<HTMLButtonElement>('.weapon-chip')) {
       slot.setAttribute('aria-pressed', String(slot.dataset.tool === tool))
     }
+    needsFrame = true
     showLessonStep()
     status()
   }
@@ -435,11 +460,15 @@ export function createApplication() {
     stage.classList.remove('boss-active', 'incident-active')
     workstation.dataset.mode = 'title'
     sound.setMode('menu')
+    needsFrame = true
     startButton.focus({ preventScroll: true })
   }
 
   function enterRun(nextRun: Run) {
     run = nextRun
+    lastArrivals = undefined
+    hazardNoted = false
+    needsFrame = true
     paused = false
     accumulator = 0
     clearControls()
@@ -490,6 +519,7 @@ export function createApplication() {
     if (!run) return
     clearControls(true)
     accumulator = 0
+    needsFrame = true
     workstation.dataset.mode = 'upgrade'
     upgradeScreen.hidden = false
     touch.hidden = true
@@ -570,6 +600,7 @@ export function createApplication() {
     touch.hidden = false
     floatingJoystick.hidden = joystickId === -1 || !dragAnywhere
     workstation.dataset.mode = lesson ? 'training' : run.phase
+    needsFrame = true
     updateGear()
     if (lesson) {
       equipInLesson(lesson, run)
@@ -582,6 +613,7 @@ export function createApplication() {
   function setPaused(value: boolean) {
     if (!run || run.phase === 'ended' || value === paused) return
     paused = value
+    needsFrame = true
     clearControls()
     accumulator = 0
     pauseScreen.hidden = !value
@@ -599,6 +631,7 @@ export function createApplication() {
     if (!run || !run.outcome) return
     clearControls()
     accumulator = 0
+    needsFrame = true
     touch.hidden = true
     pauseButton.hidden = true
     upgradeScreen.hidden = true
@@ -606,6 +639,16 @@ export function createApplication() {
     endScreen.hidden = false
     workstation.dataset.mode = 'ended'
     endDialog.dataset.outcome = run.outcome
+    const stampCopy = { qualified: '合格', pending: '待复核', repair: '整改', stopped: '停线' } as const
+    const mottoCopy = {
+      qualified: '读数如实，分寸在心。图纸有公差，做人无公差。',
+      pending: '设备停了，记录还缺。每一批都要有据可查。',
+      repair: '捷径省下的几秒，换来整批返工。眼前的方便，终要有人买单。',
+      stopped: '先保安全，再谈交付。下一班，记录依然要如实。',
+    } as const
+    text(endStamp, stampCopy[run.outcome])
+    endStamp.dataset.outcome = run.outcome
+    text(endMotto, mottoCopy[run.outcome])
     const outcomeCopy = {
       qualified: ['验收通过', '原始读数完整留档，超差批次已隔离，试验台通过本班处置。'],
       pending: ['设备已停，待复核', '还有批次缺少复检记录，暂缓交付，交由下一班核验。'],
@@ -622,7 +665,8 @@ export function createApplication() {
     text(endRisk, hazardValue(run) + ' / ' + INCIDENTS.length)
     text(endReviews, run.inspections.length + ' / ' + INCIDENTS.length)
     endImpact.hidden = run.tick < BOSS_TICK
-    text(endImpact, '事故冲击波 ' + waveCount(run) + ' 道/轮 · 安全缺口 ' + waveGapDegrees(run) + '°')
+    text(endImpact, '事故冲击波 ' + waveCount(run) + ' 道/轮 · 安全缺口 ' + waveGapDegrees(run) + '°' +
+      (hazardValue(run) > 0 ? ' · 隐患造成伤害 ' + Math.round(run.hazardDamage) + ' 点' : ' · 零隐患，冲击波保持基础强度'))
     endLog.replaceChildren()
 
     if (!run.nextShortcut) {
@@ -711,6 +755,10 @@ export function createApplication() {
       sound.play('boss')
     }
     if (signal & Signal.wave) sound.play('wave')
+    if ((signal & Signal.hazardReturn) && !hazardNoted) {
+      hazardNoted = true
+      note('隐患件回流', '免检或改写的批次回到产线，带着偏差冲向你。', 160, true)
+    }
     if (signal & Signal.pressWarning) sound.play('wave')
     if (signal & Signal.pressImpact) sound.play('boss')
     if (signal & Signal.level) {
@@ -781,7 +829,11 @@ export function createApplication() {
     } else {
       accumulator = 0
     }
-    draw(now)
+    const frozen = Boolean(run) && (paused || run!.choices.length > 0 || run!.phase === 'ended')
+    if (!frozen || needsFrame) {
+      draw(now)
+      needsFrame = false
+    }
     frameRequest = requestAnimationFrame(tickFrame)
   }
 
@@ -811,10 +863,15 @@ export function createApplication() {
       if (run && run.phase !== 'ended') note('全屏不可用', '可以继续在当前窗口值班。', 130)
     })
   })
-  document.addEventListener('fullscreenchange', () => text(fullLabel, document.fullscreenElement ? '退出全屏' : '全屏'))
+  document.addEventListener('fullscreenchange', () => {
+    needsFrame = true
+    text(fullLabel, document.fullscreenElement ? '退出全屏' : '全屏')
+  })
+  window.addEventListener('resize', () => { needsFrame = true })
 
   window.addEventListener('keydown', event => {
     if (event.altKey || event.ctrlKey || event.metaKey) return
+    sound.unlock()
     if (!run) {
       if (event.code === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
         event.preventDefault()
@@ -872,6 +929,7 @@ export function createApplication() {
     visual.style.transform = 'translate(' + dx * scale + 'px,' + dz * scale + 'px)'
   }
 
+  stage.addEventListener('pointerdown', () => sound.unlock(), { passive: true })
   stage.addEventListener('pointerdown', event => {
     if (joystickId !== -1 || !run || paused || run.phase === 'ended' ||
         run.choices.length || lesson?.step === 'done') return

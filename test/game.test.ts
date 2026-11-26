@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ARENA, PLAYER_CLEARANCE, STATIONS, isOpenFloor, type GroundPoint } from '../src/floor-plan.ts'
 import {
-  BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
+  BOSS_TICK, DASH_BUFFER, DASH_COOLDOWN, END_TICK, HAZARD_BATCH, HZ, IDLE_INPUT, INSPECTION_HOLD, SHORTCUT_TICKS, SURGES, Signal, advanceRun, attackInterval,
   chooseUpgrade, createPracticeRun, createRun, equipTool, hazardValue, isWeapon, nearestTool, placePracticeToolTarget, previewToolStats, surgeGroupAt, waveCount, waveCycleTicks, waveGapDegrees,
   type Run,
 } from '../src/simulation.hot.ts'
@@ -309,7 +309,7 @@ test('inspection requires staying put, isolates only its batch and closes the sh
   for (let i = 0; i < INSPECTION_HOLD - 1; i++) advanceRun(run, IDLE_INPUT)
   assert.ok(advanceRun(run, IDLE_INPUT) & Signal.inspection)
   assert.equal(run.inspections[0].isolated, 18)
-  assert.equal(run.inspections[0].recovery, 18)
+  assert.equal(run.inspections[0].recovery, 26)
   assert.ok(run.enemies.some(enemy => enemy.active && enemy.batch < 0))
   assert.equal(shortcut.active, false)
   assert.equal(run.incident, null)
@@ -598,4 +598,81 @@ test('the pressure head locks its ground zone and deals damage only at the indic
     for (let i = 0; i < 28; i++) advanceRun(run, IDLE_INPUT)
     assert.equal(run.boss.press, null)
   }
+})
+
+test('hazard damage counts only hits caused by an extra or narrowed wave', () => {
+  const placeAt = (run: Run, angle: number) => {
+    for (const r of [3, 3.5, 4, 4.5, 5, 5.5, 6]) {
+      const x = run.boss.x + Math.cos(angle) * r
+      const z = run.boss.z + Math.sin(angle) * r
+      if (Math.abs(x) <= ARENA.x - PLAYER_CLEARANCE && Math.abs(z) <= ARENA.z - PLAYER_CLEARANCE &&
+          isOpenFloor(x, z, PLAYER_CLEARANCE)) {
+        run.player.x = x
+        run.player.z = z
+        return
+      }
+    }
+    throw new Error('Could not place player on open floor')
+  }
+
+  const extra = createRun(76)
+  emptyFloor(extra)
+  extra.nextAttack = Infinity
+  extra.passes = 1
+  extra.tick = BOSS_TICK - 1
+  assert.ok(advanceRun(extra, IDLE_INPUT) & Signal.boss)
+  const extraWarningAt = extra.boss.nextWave
+  while (extra.tick < extraWarningAt) advanceRun(extra, IDLE_INPUT)
+  for (const enemy of extra.enemies) enemy.active = false
+  const [w0, w1] = extra.waves.filter(wave => wave.active)
+  const sign = Math.sign(Math.atan2(Math.sin(w1.gapCenter - w0.gapCenter), Math.cos(w1.gapCenter - w0.gapCenter))) || 1
+  placeAt(extra, w0.gapCenter - sign * 0.7)
+  while (!w0.crossed || !w1.crossed) advanceRun(extra, IDLE_INPUT)
+  assert.equal(w0.crossedSafely, true)
+  assert.equal(w1.crossedSafely, false)
+  assert.equal(extra.hazardDamage, 24)
+
+  const base = createRun(76)
+  emptyFloor(base)
+  base.nextAttack = Infinity
+  base.passes = 0
+  base.tick = BOSS_TICK - 1
+  assert.ok(advanceRun(base, IDLE_INPUT) & Signal.boss)
+  const baseWarningAt = base.boss.nextWave
+  while (base.tick < baseWarningAt) advanceRun(base, IDLE_INPUT)
+  const [bw0] = base.waves.filter(wave => wave.active)
+  placeAt(base, bw0.gapCenter + Math.PI)
+  while (!bw0.crossed) advanceRun(base, IDLE_INPUT)
+  assert.equal(bw0.crossedSafely, false)
+  assert.equal(base.hazardDamage, 0)
+})
+
+test('shortcut hazards send returned parts into the boss phase and their hits count as hazard damage', () => {
+  const run = createRun(76)
+  emptyFloor(run)
+  run.nextAttack = Infinity
+  run.passes = 2
+  run.tick = BOSS_TICK - 1
+  assert.ok(advanceRun(run, IDLE_INPUT) & Signal.boss)
+  const warningAt = run.boss.nextWave
+  let lastSignal = 0
+  while (run.tick < warningAt) lastSignal = advanceRun(run, IDLE_INPUT)
+  assert.ok(lastSignal & Signal.hazardReturn)
+  const returned = run.enemies.filter(enemy => enemy.active && enemy.batch === HAZARD_BATCH)
+  assert.equal(returned.length, 4)
+  assert.ok(returned.every(enemy => enemy.kind === 'bolt'))
+
+  if (isOpenFloor(6, 3, PLAYER_CLEARANCE)) {
+    run.player.x = 6
+    run.player.z = 3
+  } else {
+    run.player.x = -6
+    run.player.z = 3
+  }
+  returned[0].x = run.player.x
+  returned[0].z = run.player.z
+  run.player.protectedUntil = 0
+  const before = run.hazardDamage
+  advanceRun(run, IDLE_INPUT)
+  assert.equal(run.hazardDamage - before, 15)
 })

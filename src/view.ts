@@ -4,7 +4,7 @@ import {
   Mesh, MeshBasicMaterial, NearestFilter, Object3D, OrthographicCamera, PlaneGeometry,
   RingGeometry, Scene, ShaderMaterial, SRGBColorSpace, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
-import { ARENA, DASH_COOLDOWN, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUT_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
+import { ARENA, DASH_COOLDOWN, HAZARD_BATCH, HZ, INSPECTION_HOLD, INSPECTION_RADIUS, SHORTCUT_RADIUS, type Run, type RunEffect, type Wave } from './simulation.hot.ts'
 import { stationContact } from './floor-plan.ts'
 import { createInspector, createTestRig } from './models.ts'
 import { createSpriteAtlas, type SpriteName } from './sprites.ts'
@@ -20,6 +20,14 @@ const ICE = new Color('#67bed3')
 const DARK = new Color('#071619')
 const HUD_INK = new Color('#111b27')
 const CALIBRATION_PAINT = new Color('#bc986f')
+const SIDES = [-1, 1] as const
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+const TITLE_LAYOUT: readonly { name: SpriteName; x: number; z: number; w: number; h: number }[] = [
+  { name: 'blank', x: -3.9, z: -.8, w: 1.61, h: 1.21 },
+  { name: 'blank', x: 4.8, z: 2.7, w: 1.39, h: 1.05 },
+  { name: 'bolt', x: 3.1, z: 2.3, w: 1.50, h: 1.91 },
+  { name: 'phantom', x: -.8, z: -4.2, w: 1.48, h: 1.75 },
+]
 
 const EMPTY_FLAGS = { depthWrite: false, transparent: true }
 type Atlas = ReturnType<typeof createSpriteAtlas>
@@ -49,7 +57,7 @@ const spriteFragment = /* glsl */ [
   '  vec4 paint = texture2D(textureAtlas, atlasUv);',
   '  if(paint.a < .55) discard;',
   '  float highlight = max(paint.r, max(paint.g, paint.b));',
-  '  vec3 hit = mix(paint.rgb * vec3(1.12, 1., .87), vec3(1., .73, .46), .12 + .24 * highlight);',
+  '  vec3 hit = mix(paint.rgb, vec3(1., .97, .9), .6 + .3 * highlight);',
   '  gl_FragColor = vec4(mix(paint.rgb, hit, flash), 1.);',
   '  #include <colorspace_fragment>',
   '}',
@@ -237,7 +245,7 @@ function makeWaveMesh(geometry: PlaneGeometry) {
 }
 
 export function createGameView(host: HTMLElement) {
-  const renderer = new WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance' })
+  const renderer = new WebGLRenderer({ antialias: false, alpha: false, depth: false, stencil: false, powerPreference: 'high-performance' })
   renderer.outputColorSpace = SRGBColorSpace
   renderer.setPixelRatio(1)
   renderer.domElement.setAttribute('aria-hidden', 'true')
@@ -261,10 +269,10 @@ export function createGameView(host: HTMLElement) {
   const atlas = createSpriteAtlas()
   const sprites = new SpriteBatch(atlas)
   world.add(sprites.mesh)
-  const shadows = makeFloorBatch(new CircleGeometry(1, 17), 200, .62)
+  const shadows = makeFloorBatch(new CircleGeometry(1, 17), 256, .62)
   const lightShadows = makeFloorBatch(new CircleGeometry(1, 12), 8, .36)
-  const markings = makeFloorBatch(new RingGeometry(.89, 1, 42), 64, .75)
-  const strips = makeFloorBatch(new BoxGeometry(1, .022, 1), 350, .82)
+  const markings = makeFloorBatch(new RingGeometry(.89, 1, 42), 128, .75)
+  const strips = makeFloorBatch(new BoxGeometry(1, .022, 1), 768, .82)
   shadows.renderOrder = 1
   lightShadows.renderOrder = 2
   markings.renderOrder = 4
@@ -344,13 +352,15 @@ export function createGameView(host: HTMLElement) {
   }
 
   function castShadow(x: number, z: number, width: number, length: number) {
-    const index = lightShadows.count++
+    const index = lightShadows.count
+    if (index >= lightShadows.instanceMatrix.count) return
     dummy.position.set(x + length * .34, .020, z + length * .25)
     dummy.rotation.set(-Math.PI / 2, 0, -.49)
     dummy.scale.set(length, width, 1)
     dummy.updateMatrix()
     lightShadows.setMatrixAt(index, dummy.matrix)
     lightShadows.setColorAt(index, DARK)
+    lightShadows.count++
   }
 
   function marker(x: number, z: number, radius: number, color: Color, height = .045) {
@@ -493,6 +503,16 @@ export function createGameView(host: HTMLElement) {
 
   function drawFloor(run: Run) {
     const time = run.tick / HZ
+    const { player } = run
+    const hp = player.hp / player.maximumHp
+    line(player.x - .57, player.z + .71, player.x + .57, player.z + .71, .135, HUD_INK, .10)
+    if (hp > 0) line(player.x - .52, player.z + .71, player.x - .52 + 1.04 * hp,
+      player.z + .71, .081, hp < .27 ? RUST : MINT, .12)
+    if (run.tick < player.dashReadyAt) {
+      const charge = 1 - (player.dashReadyAt - run.tick) / DASH_COOLDOWN
+      if (charge > .01) line(player.x - .50, player.z + .88, player.x - .50 + charge,
+        player.z + .88, .060, ICE, .10)
+    }
     drawIncident(run)
     const surge = run.surge
     if (surge) {
@@ -538,6 +558,7 @@ export function createGameView(host: HTMLElement) {
       const width = enemy.kind === 'bolt' ? 1.08 : enemy.kind === 'phantom' ? 1.02 : .99
       const height = enemy.kind === 'bolt' ? 1.44 : enemy.kind === 'phantom' ? 1.24 : .79
       shadow(enemy.x, enemy.z, width * .48, width * .31)
+      if (enemy.batch === HAZARD_BATCH) marker(enemy.x, enemy.z, enemy.radius + .12, RUST, .05)
       sprites.add(enemy.kind, enemy.x, enemy.z, width * (recovering ? 1.05 : 1), height * (recovering ? .91 : 1),
         Math.max(.025, bob), enemy.facing, Math.max(flash, charging ? .27 : 0))
       if (charging) {
@@ -555,7 +576,7 @@ export function createGameView(host: HTMLElement) {
         if (bolt && travel > .82) {
           const x = enemy.x + enemy.dx * travel
           const z = enemy.z + enemy.dz * travel
-          for (const side of [-1, 1]) {
+          for (const side of SIDES) {
             line(x - enemy.dx * .36 - enemy.dz * side * .21, z - enemy.dz * .36 + enemy.dx * side * .21,
               x, z, .073, tone)
           }
@@ -568,10 +589,15 @@ export function createGameView(host: HTMLElement) {
       line(projectile.x - projectile.dx * .48, projectile.z - projectile.dz * .48, projectile.x, projectile.z, .12, LILAC, .16)
     }
 
-    const { player } = run
     const dashing = run.tick < player.dashUntil && player.moving
     const strokeKind = run.activeTool === 'caliper' ? 'slice' : run.activeTool
-    const stroke = run.effects.find(effect => effect.kind === strokeKind && run.tick - effect.from < 12 && effect.until > run.tick)
+    let stroke: RunEffect | undefined
+    for (const effect of run.effects) {
+      if (effect.kind === strokeKind && run.tick - effect.from < 12 && effect.until > run.tick) {
+        stroke = effect
+        break
+      }
+    }
     const dx = dashing ? player.dashX : !player.moving && stroke ? stroke.toX - player.x : player.dx
     const dz = dashing ? player.dashZ : !player.moving && stroke ? stroke.toZ - player.z : player.dz
     const desired = Math.atan2(dx, dz)
@@ -586,21 +612,18 @@ export function createGameView(host: HTMLElement) {
     shadow(player.x - .06, player.z - .024, .46, .27)
     castShadow(player.x, player.z, .37, dashing ? .97 : .75)
     marker(player.x, player.z, .50, run.tick < run.boostUntil ? GOLD : MINT)
-    const hp = player.hp / player.maximumHp
-    line(player.x - .57, player.z + .71, player.x + .57, player.z + .71, .135, HUD_INK, .10)
-    if (hp > 0) line(player.x - .52, player.z + .71, player.x - .52 + 1.04 * hp,
-      player.z + .71, .081, hp < .27 ? RUST : MINT, .12)
-    if (run.tick < player.dashReadyAt) {
-      const charge = 1 - (player.dashReadyAt - run.tick) / DASH_COOLDOWN
-      if (charge > .01) line(player.x - .50, player.z + .88, player.x - .50 + charge,
-        player.z + .88, .060, ICE, .10)
-    }
     if (run.boss.active) {
       const { boss } = run
       const press = boss.press
       const warning = !!press && run.tick < press.strikesAt
-      const charging = warning ||
-        run.waves.some(wave => wave.active && run.tick >= wave.warnAt && run.tick < wave.pulseAt)
+      let waveCharging = false
+      for (const wave of run.waves) {
+        if (wave.active && run.tick >= wave.warnAt && run.tick < wave.pulseAt) {
+          waveCharging = true
+          break
+        }
+      }
+      const charging = warning || waveCharging
       let ramTravel = 0
       if (press) {
         const toImpact = press.strikesAt - run.tick
@@ -650,7 +673,7 @@ export function createGameView(host: HTMLElement) {
         const dz = effect.toZ - effect.z
         const width = .20 * (1 - progress) + .025
         line(effect.x, effect.z, effect.toX, effect.toZ, width, ICE, .05)
-        for (const side of [-1, 1]) {
+        for (const side of SIDES) {
           const spread = side * (.05 + progress * .06)
           line(effect.x + dx * .12 - dz * spread, effect.z + dz * .12 + dx * spread,
             effect.toX - dz * spread, effect.toZ + dx * spread, .065 * (1 - progress), MINT, .054)
@@ -707,13 +730,7 @@ export function createGameView(host: HTMLElement) {
     }
     marker(x + 3.4, z - 3.2, .74, GOLD)
     sprites.add('pass', x + 3.4, z - 3.2, .87, .9, .26 + Math.sin(time * 2.7) * .13)
-    const layout: { name: SpriteName; x: number; z: number; w: number; h: number }[] = [
-      { name: 'blank', x: -3.9, z: -.8, w: 1.61, h: 1.21 },
-      { name: 'blank', x: 4.8, z: 2.7, w: 1.39, h: 1.05 },
-      { name: 'bolt', x: 3.1, z: 2.3, w: 1.50, h: 1.91 },
-      { name: 'phantom', x: -.8, z: -4.2, w: 1.48, h: 1.75 },
-    ]
-    for (const prop of layout) {
+    for (const prop of TITLE_LAYOUT) {
       shadow(x + prop.x, z + prop.z, prop.w * .45, prop.w * .25)
       sprites.add(prop.name, x + prop.x, z + prop.z, prop.w, prop.h, .1 + .055 * Math.sin(time * 2 + prop.x), prop.x > 0 ? -1 : 1)
     }
@@ -767,7 +784,7 @@ export function createGameView(host: HTMLElement) {
           for (let step = .86; step < distance - .62; step += .56) {
             const tipX = x + dx * step
             const tipZ = z + dz * step
-            for (const side of [-1, 1]) {
+            for (const side of SIDES) {
               line(tipX - dx * .26 - dz * .17 * side, tipZ - dz * .26 + dx * .17 * side,
                 tipX, tipZ, .077, MINT, .079)
             }
@@ -796,8 +813,18 @@ export function createGameView(host: HTMLElement) {
 
     const margin = aspect >= 1.19 ? 3.05 : Math.max(0, ARENA.x - viewWidth * .29)
     cameraX = Math.max(-margin, Math.min(margin, cameraX))
-    camera.position.set(cameraX, run ? 28 : 23, cameraZ + (run ? 24 : 26))
-    camera.lookAt(cameraX, 0, cameraZ)
+    let shake = 0
+    if (run && !reducedMotion.matches) {
+      const hurtShake = Math.max(0, 1 - (run.tick - run.player.hurtAt) / 12) * .18
+      const press = run.boss.press
+      const pressElapsed = press ? run.tick - press.strikesAt : -1
+      const pressShake = press && pressElapsed >= 0 && pressElapsed < 14 ? .28 * (1 - pressElapsed / 14) : 0
+      shake = Math.max(hurtShake, pressShake)
+    }
+    const renderX = shake > 0 ? cameraX + (Math.random() - .5) * 2 * shake : cameraX
+    const renderZ = shake > 0 ? cameraZ + (Math.random() - .5) * 2 * shake : cameraZ
+    camera.position.set(renderX, run ? 28 : 23, renderZ + (run ? 24 : 26))
+    camera.lookAt(renderX, 0, renderZ)
     sprites.flush()
     for (const batch of floorBatches) {
       if (!batch.count) continue
